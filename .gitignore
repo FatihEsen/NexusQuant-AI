@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Graphify local cache and machine-specific configs
+graphify-out/.graphify_*
+graphify-out/cache/
+
