@@ -24,6 +24,8 @@ interface CandleRow {
 }
 
 interface SimulateRequestBody {
+  aiProvider?: 'gemini' | 'groq' | 'openrouter' | 'custom';
+  model?: string;
   pair?: string;
   timeframe?: string;
   language?: 'en' | 'tr';
@@ -45,6 +47,10 @@ interface SimulateRequestBody {
     post_trade_journal_summary: boolean;
   };
   customGeminiKey?: string;
+  customGroqKey?: string;
+  customOpenRouterKey?: string;
+  customApiKey?: string;
+  customApiBaseUrl?: string;
   compactCsv?: string;
   rawJsonChars?: number;
 }
@@ -219,7 +225,15 @@ app.get('/api/market-pulse', async (_req, res) => {
 
 app.post('/api/test-connection', async (req, res) => {
   const {
+    aiProvider = 'gemini',
     geminiApiKey,
+    groqApiKey,
+    groqModel,
+    openRouterApiKey,
+    openRouterModel,
+    customApiBaseUrl,
+    customApiKey,
+    customModel,
     okxApiKey,
     okxSecretKey,
     okxPassphrase,
@@ -229,42 +243,166 @@ app.post('/api/test-connection', async (req, res) => {
   } = req.body as Record<string, string | undefined>;
 
   const results: {
+    ai: { ok: boolean; provider: string; mode: string; detail: string };
     gemini: { ok: boolean; mode: 'live' | 'env' | 'missing'; detail: string };
     okx: { ok: boolean; mode: 'public_ok' | 'keys_incomplete'; detail: string };
     freqtrade: { ok: boolean; reachable: boolean; detail: string };
   } = {
+    ai: { ok: false, provider: aiProvider, mode: 'missing', detail: 'No AI key configured' },
     gemini: { ok: false, mode: 'missing', detail: 'No Gemini API key configured' },
     okx: { ok: false, mode: 'keys_incomplete', detail: 'OKX credentials incomplete' },
     freqtrade: { ok: false, reachable: false, detail: 'Freqtrade URL not checked' },
   };
 
-  // 1. Test Gemini API server-side
-  const effectiveKey = geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
-  if (effectiveKey) {
+  // 1. Test Selected AI Provider
+  if (aiProvider === 'groq') {
+    const key = groqApiKey?.trim() || process.env.GROQ_API_KEY?.trim();
+    if (!key) {
+      results.ai = { ok: false, provider: 'groq', mode: 'missing', detail: 'Groq API key not provided' };
+    } else {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        const gRes = await fetch('https://api.groq.com/openai/v1/models', {
+          headers: { Authorization: `Bearer ${key}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (gRes.ok) {
+          results.ai = {
+            ok: true,
+            provider: 'groq',
+            mode: groqApiKey?.trim() ? 'live' : 'env',
+            detail: `Groq Cloud API verified (${groqModel || 'llama-3.3-70b-versatile'} ready)`,
+          };
+        } else {
+          results.ai = {
+            ok: false,
+            provider: 'groq',
+            mode: 'error',
+            detail: `Groq returned HTTP ${gRes.status}`,
+          };
+        }
+      } catch (err) {
+        results.ai = {
+          ok: false,
+          provider: 'groq',
+          mode: 'error',
+          detail: err instanceof Error ? err.message : 'Groq ping failed',
+        };
+      }
+    }
+  } else if (aiProvider === 'openrouter') {
+    const key = openRouterApiKey?.trim() || process.env.OPENROUTER_API_KEY?.trim();
+    if (!key) {
+      results.ai = { ok: false, provider: 'openrouter', mode: 'missing', detail: 'OpenRouter API key not provided' };
+    } else {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        const orRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+          headers: { Authorization: `Bearer ${key}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (orRes.ok) {
+          results.ai = {
+            ok: true,
+            provider: 'openrouter',
+            mode: openRouterApiKey?.trim() ? 'live' : 'env',
+            detail: `OpenRouter API key verified (${openRouterModel || 'deepseek/deepseek-r1'} ready)`,
+          };
+        } else {
+          results.ai = {
+            ok: false,
+            provider: 'openrouter',
+            mode: 'error',
+            detail: `OpenRouter returned HTTP ${orRes.status}`,
+          };
+        }
+      } catch (err) {
+        results.ai = {
+          ok: false,
+          provider: 'openrouter',
+          mode: 'error',
+          detail: err instanceof Error ? err.message : 'OpenRouter ping failed',
+        };
+      }
+    }
+  } else if (aiProvider === 'custom') {
+    const baseUrl = (customApiBaseUrl || 'http://localhost:11434/v1').trim().replace(/\/+$/, '');
+    const key = customApiKey?.trim() || process.env.CUSTOM_API_KEY?.trim() || '';
     try {
-      const ai = createGeminiClient(geminiApiKey);
-      const ping = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: 'Respond with OK.',
-        config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
-      });
-      const text = (ping.text ?? '').trim();
-      results.gemini = {
-        ok: Boolean(text),
-        mode: geminiApiKey?.trim() ? 'live' : 'env',
-        detail: geminiApiKey?.trim()
-          ? 'Custom Gemini key verified via server proxy'
-          : 'AI Studio server Gemini key verified',
-      };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const headers: Record<string, string> = {};
+      if (key) headers.Authorization = `Bearer ${key}`;
+      const cRes = await fetch(`${baseUrl}/models`, { headers, signal: controller.signal });
+      clearTimeout(timer);
+      if (cRes.ok) {
+        results.ai = {
+          ok: true,
+          provider: 'custom',
+          mode: 'custom',
+          detail: `Custom OpenAI-compatible endpoint verified at ${baseUrl}`,
+        };
+      } else {
+        results.ai = {
+          ok: false,
+          provider: 'custom',
+          mode: 'error',
+          detail: `Endpoint returned HTTP ${cRes.status}`,
+        };
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Gemini request failed';
-      results.gemini = {
+      results.ai = {
         ok: false,
-        mode: geminiApiKey?.trim() ? 'live' : 'env',
-        detail: message,
+        provider: 'custom',
+        mode: 'error',
+        detail: err instanceof Error ? err.message : 'Custom endpoint unreachable',
       };
+    }
+  } else {
+    // Default: Gemini
+    const effectiveKey = geminiApiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+    if (effectiveKey) {
+      try {
+        const ai = createGeminiClient(geminiApiKey);
+        const ping = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: 'Respond with OK.',
+          config: {
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        });
+        const text = (ping.text ?? '').trim();
+        results.gemini = {
+          ok: Boolean(text),
+          mode: geminiApiKey?.trim() ? 'live' : 'env',
+          detail: geminiApiKey?.trim()
+            ? 'Custom Gemini key verified via server proxy'
+            : 'AI Studio server Gemini key verified',
+        };
+        results.ai = {
+          ok: results.gemini.ok,
+          provider: 'gemini',
+          mode: results.gemini.mode,
+          detail: results.gemini.detail,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Gemini request failed';
+        results.gemini = {
+          ok: false,
+          mode: geminiApiKey?.trim() ? 'live' : 'env',
+          detail: message,
+        };
+        results.ai = {
+          ok: false,
+          provider: 'gemini',
+          mode: geminiApiKey?.trim() ? 'live' : 'env',
+          detail: message,
+        };
+      }
     }
   }
 
@@ -355,8 +493,16 @@ app.post('/api/test-connection', async (req, res) => {
   res.json(results);
 });
 
-app.post('/api/gemini/simulate', async (req, res) => {
+function cleanJsonOutput(text: string): string {
+  const trimmed = (text || '').trim();
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) return fenceMatch[1].trim();
+  return trimmed;
+}
+
+const simulateHandler = async (req: express.Request, res: express.Response) => {
   const body = (req.body || {}) as SimulateRequestBody;
+  const aiProvider = body.aiProvider || 'gemini';
   const pair = body.pair || 'BTC/USDT';
   const timeframe = body.timeframe || '15m';
   const language = body.language === 'tr' ? 'tr' : 'en';
@@ -388,84 +534,6 @@ app.post('/api/gemini/simulate', async (req, res) => {
     marketSource = source === 'live' ? 'live' : 'sample';
   }
 
-  const effectiveKey = body.customGeminiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
-  if (!effectiveKey) {
-    res.status(400).json({
-      error: 'Gemini API key is not configured on the server or in Settings.',
-    });
-    return;
-  }
-
-  const ai = createGeminiClient(body.customGeminiKey);
-
-  // Build modular FunctionDeclarations ONLY for enabled skills
-  const functionDeclarations: FunctionDeclaration[] = [];
-
-  if (enabledSkills.fetch_sentiment_and_fear_greed) {
-    functionDeclarations.push({
-      name: 'fetch_sentiment_and_fear_greed',
-      description:
-        'Fetch live crypto Fear & Greed Index and recent market sentiment headlines for the trading pair.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          symbol: { type: Type.STRING, description: 'Base asset symbol, e.g. BTC or ETH' },
-        },
-        required: ['symbol'],
-      },
-    });
-  }
-
-  if (enabledSkills.check_multi_timeframe_trend) {
-    functionDeclarations.push({
-      name: 'check_multi_timeframe_trend',
-      description:
-        'Inspect higher timeframe (1h and 4h) EMA trend alignment before approving a lower timeframe entry.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          pair: { type: Type.STRING, description: 'Trading pair such as BTC/USDT' },
-          lower_timeframe: { type: Type.STRING, description: 'Current signal timeframe, e.g. 15m' },
-        },
-        required: ['pair', 'lower_timeframe'],
-      },
-    });
-  }
-
-  if (enabledSkills.calculate_dynamic_position_size) {
-    functionDeclarations.push({
-      name: 'calculate_dynamic_position_size',
-      description:
-        'Calculate adjusted USDT stake size based on preliminary signal confidence and ATR volatility.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          preliminary_confidence: { type: Type.NUMBER, description: 'Confidence 0 to 100' },
-          atr_percent: { type: Type.NUMBER, description: 'ATR volatility percentage' },
-          base_stake_usdt: { type: Type.NUMBER, description: 'Default stake amount in USDT' },
-        },
-        required: ['preliminary_confidence', 'atr_percent', 'base_stake_usdt'],
-      },
-    });
-  }
-
-  if (enabledSkills.post_trade_journal_summary) {
-    functionDeclarations.push({
-      name: 'post_trade_journal_summary',
-      description:
-        'Generate a concise 1-sentence localized journal entry summarizing the technical and sentiment rationale.',
-      parameters: {
-        type: Type.OBJECT,
-        properties: {
-          pair: { type: Type.STRING, description: 'Trading pair' },
-          proposed_action: { type: Type.STRING, description: 'BUY, SELL, or HOLD' },
-          summary_note: { type: Type.STRING, description: '1-sentence rationale in the requested UI language' },
-        },
-        required: ['pair', 'proposed_action', 'summary_note'],
-      },
-    });
-  }
-
   const fng = feeds.fearGreed ? await fetchFearAndGreed() : null;
   const languageName = language === 'tr' ? 'Turkish (Türkçe)' : 'English';
 
@@ -473,6 +541,7 @@ app.post('/api/gemini/simulate', async (req, res) => {
 Respond with extreme precision. Output reasoning and journal notes strictly in ${languageName}.
 Approval threshold is ${confidenceThreshold}% confidence.
 If you have tools attached, call the relevant enabled tools before making your final judgment so you ground your decision in multi-timeframe trend, sentiment, and dynamic position sizing.
+Return final output strictly as JSON with keys: action ("BUY"|"SELL"|"HOLD"), confidence (0-100), reasoning (${languageName}), position_multiplier (0.25-1.25), journal_note (1 sentence in ${languageName}).
 Keep explanations concise (max 2 sentences).`;
 
   const userPrompt = [
@@ -484,151 +553,370 @@ Keep explanations concise (max 2 sentences).`;
     `Return final decision as JSON with keys: action (BUY|SELL|HOLD), confidence (0-100), reasoning (${languageName}), position_multiplier (0.25-1.25), journal_note (1 sentence in ${languageName}).`,
   ].join('\n');
 
-  const toolTrace: Array<{
-    skill: string;
-    args: Record<string, unknown>;
-    result: Record<string, unknown>;
-  }> = [];
+  const executeSkill = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    if (name === 'fetch_sentiment_and_fear_greed') {
+      const liveFng = await fetchFearAndGreed();
+      const baseSym = String(args.symbol || pair.split('/')[0]);
+      return {
+        fear_greed_index: liveFng.value,
+        classification: liveFng.classification,
+        cryptopanic_headlines: feeds.cryptoPanic
+          ? [
+              `${baseSym} institutional spot inflows remain resilient ahead of US session`,
+              `OKX perpetual funding rate stays neutral at +0.008%`,
+            ]
+          : [],
+        source: liveFng.source,
+      };
+    } else if (name === 'check_multi_timeframe_trend') {
+      const instId = pair.replace('/', '-');
+      const [h1, h4] = await Promise.all([
+        fetchOkxCandles(instId, '1H', 10),
+        fetchOkxCandles(instId, '4H', 10),
+      ]);
+      const h1Closes = h1.candles.map((c) => c.c);
+      const h4Closes = h4.candles.map((c) => c.c);
+      const h1Slope =
+        h1Closes.length > 1
+          ? Number((((h1Closes[h1Closes.length - 1] - h1Closes[0]) / h1Closes[0]) * 100).toFixed(2))
+          : 0;
+      const h4Slope =
+        h4Closes.length > 1
+          ? Number((((h4Closes[h4Closes.length - 1] - h4Closes[0]) / h4Closes[0]) * 100).toFixed(2))
+          : 0;
+      return {
+        tf_1h_change_pct: h1Slope,
+        tf_4h_change_pct: h4Slope,
+        trend_1h: h1Slope >= 0 ? 'BULLISH' : 'BEARISH',
+        trend_4h: h4Slope >= -0.4 ? 'CONSTRUCTIVE' : 'WEAK',
+        aligned: rsi < 35 ? h4Slope > -1.5 : rsi > 65 ? h1Slope < 1.5 : false,
+      };
+    } else if (name === 'calculate_dynamic_position_size') {
+      const conf = Number(args.preliminary_confidence ?? 78);
+      const atr = Number(args.atr_percent ?? atrPct);
+      const stake = Number(args.base_stake_usdt ?? baseStakeUsdt);
+      const confFactor = conf >= 85 ? 1.0 : conf >= 70 ? 0.7 : 0.4;
+      const volFactor = atr > 2.2 ? 0.75 : atr < 0.8 ? 1.1 : 1.0;
+      const multiplier = Number((confFactor * volFactor).toFixed(2));
+      return {
+        recommended_multiplier: multiplier,
+        recommended_stake_usdt: Number((stake * multiplier).toFixed(2)),
+        volatility_regime: atr > 2.2 ? 'HIGH' : 'NORMAL',
+      };
+    } else if (name === 'post_trade_journal_summary') {
+      return {
+        recorded: true,
+        language,
+        note: String(args.summary_note || ''),
+      };
+    }
+    return {};
+  };
 
+  const toolTrace: Array<{ skill: string; args: Record<string, unknown>; result: Record<string, unknown> }> = [];
   let totalPromptTokens = 0;
   let totalOutputTokens = 0;
+  let rawJsonText = '';
 
   try {
-    let rawJsonText = '';
+    if (aiProvider === 'groq' || aiProvider === 'openrouter' || aiProvider === 'custom') {
+      let endpoint = '';
+      let apiKey = '';
+      let targetModel = body.model || '';
+      const extraHeaders: Record<string, string> = {};
 
-    if (functionDeclarations.length > 0) {
-      const step1 = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        config: {
-          systemInstruction,
-          tools: [{ functionDeclarations }],
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        },
+      if (aiProvider === 'groq') {
+        endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+        apiKey = body.customGroqKey?.trim() || process.env.GROQ_API_KEY?.trim() || '';
+        targetModel = targetModel || 'llama-3.3-70b-versatile';
+        if (!apiKey) {
+          res.status(400).json({ error: 'Groq API key is not configured in Settings or server environment.' });
+          return;
+        }
+      } else if (aiProvider === 'openrouter') {
+        endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+        apiKey = body.customOpenRouterKey?.trim() || process.env.OPENROUTER_API_KEY?.trim() || '';
+        targetModel = targetModel || 'deepseek/deepseek-r1';
+        extraHeaders['HTTP-Referer'] = 'https://nexusquant.ai';
+        extraHeaders['X-Title'] = 'NexusQuant AI';
+        if (!apiKey) {
+          res.status(400).json({ error: 'OpenRouter API key is not configured in Settings or server environment.' });
+          return;
+        }
+      } else {
+        const baseUrl = (body.customApiBaseUrl || 'http://localhost:11434/v1').trim().replace(/\/+$/, '');
+        endpoint = `${baseUrl}/chat/completions`;
+        apiKey = body.customApiKey?.trim() || process.env.CUSTOM_API_KEY?.trim() || '';
+        targetModel = targetModel || 'llama3';
+      }
+
+      const openAiTools = [
+        ...(enabledSkills.fetch_sentiment_and_fear_greed ? [{
+          type: 'function',
+          function: {
+            name: 'fetch_sentiment_and_fear_greed',
+            description: 'Fetch live crypto Fear & Greed Index and recent market sentiment headlines for the trading pair.',
+            parameters: {
+              type: 'object',
+              properties: { symbol: { type: 'string', description: 'Base asset symbol, e.g. BTC or ETH' } },
+              required: ['symbol'],
+            },
+          },
+        }] : []),
+        ...(enabledSkills.check_multi_timeframe_trend ? [{
+          type: 'function',
+          function: {
+            name: 'check_multi_timeframe_trend',
+            description: 'Inspect higher timeframe (1h and 4h) EMA trend alignment before approving a lower timeframe entry.',
+            parameters: {
+              type: 'object',
+              properties: {
+                pair: { type: 'string', description: 'Trading pair such as BTC/USDT' },
+                lower_timeframe: { type: 'string', description: 'Current signal timeframe, e.g. 15m' },
+              },
+              required: ['pair', 'lower_timeframe'],
+            },
+          },
+        }] : []),
+        ...(enabledSkills.calculate_dynamic_position_size ? [{
+          type: 'function',
+          function: {
+            name: 'calculate_dynamic_position_size',
+            description: 'Calculate adjusted USDT stake size based on preliminary signal confidence and ATR volatility.',
+            parameters: {
+              type: 'object',
+              properties: {
+                preliminary_confidence: { type: 'number', description: 'Confidence 0 to 100' },
+                atr_percent: { type: 'number', description: 'ATR volatility percentage' },
+                base_stake_usdt: { type: 'number', description: 'Default stake amount in USDT' },
+              },
+              required: ['preliminary_confidence', 'atr_percent', 'base_stake_usdt'],
+            },
+          },
+        }] : []),
+        ...(enabledSkills.post_trade_journal_summary ? [{
+          type: 'function',
+          function: {
+            name: 'post_trade_journal_summary',
+            description: 'Generate a concise 1-sentence localized journal entry summarizing the technical and sentiment rationale.',
+            parameters: {
+              type: 'object',
+              properties: {
+                pair: { type: 'string', description: 'Trading pair' },
+                proposed_action: { type: 'string', description: 'BUY, SELL, or HOLD' },
+                summary_note: { type: 'string', description: '1-sentence rationale in the requested UI language' },
+              },
+              required: ['pair', 'proposed_action', 'summary_note'],
+            },
+          },
+        }] : []),
+      ];
+
+      const messages: any[] = [
+        { role: 'system', content: systemInstruction },
+        { role: 'user', content: userPrompt },
+      ];
+
+      const reqBody1: any = {
+        model: targetModel,
+        messages,
+        temperature: 0.1,
+      };
+
+      if (openAiTools.length > 0) {
+        reqBody1.tools = openAiTools;
+        reqBody1.tool_choice = 'auto';
+      } else {
+        reqBody1.response_format = { type: 'json_object' };
+      }
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...extraHeaders,
+      };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+      const res1 = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(reqBody1),
       });
 
-      totalPromptTokens += step1.usageMetadata?.promptTokenCount ?? 0;
-      totalOutputTokens += step1.usageMetadata?.candidatesTokenCount ?? 0;
+      if (!res1.ok) {
+        const errText = await res1.text();
+        throw new Error(`${aiProvider.toUpperCase()} HTTP ${res1.status}: ${errText}`);
+      }
 
-      const functionCalls = step1.functionCalls ?? [];
+      const json1 = (await res1.json()) as any;
+      totalPromptTokens += json1.usage?.prompt_tokens ?? 0;
+      totalOutputTokens += json1.usage?.completion_tokens ?? 0;
 
-      if (functionCalls.length > 0) {
-        const functionResponses = [];
+      const choice1 = json1.choices?.[0];
+      const message1 = choice1?.message;
+      const toolCalls = message1?.tool_calls || [];
 
-        for (const fc of functionCalls) {
-          const args = (fc.args ?? {}) as Record<string, unknown>;
-          let toolResult: Record<string, unknown> = {};
-
-          if (fc.name === 'fetch_sentiment_and_fear_greed') {
-            const liveFng = await fetchFearAndGreed();
-            const baseSym = String(args.symbol || pair.split('/')[0]);
-            toolResult = {
-              fear_greed_index: liveFng.value,
-              classification: liveFng.classification,
-              cryptopanic_headlines: feeds.cryptoPanic
-                ? [
-                    `${baseSym} institutional spot inflows remain resilient ahead of US session`,
-                    `OKX perpetual funding rate stays neutral at +0.008%`,
-                  ]
-                : [],
-              source: liveFng.source,
-            };
-          } else if (fc.name === 'check_multi_timeframe_trend') {
-            const instId = pair.replace('/', '-');
-            const [h1, h4] = await Promise.all([
-              fetchOkxCandles(instId, '1H', 10),
-              fetchOkxCandles(instId, '4H', 10),
-            ]);
-            const h1Closes = h1.candles.map((c) => c.c);
-            const h4Closes = h4.candles.map((c) => c.c);
-            const h1Slope =
-              h1Closes.length > 1
-                ? Number((((h1Closes[h1Closes.length - 1] - h1Closes[0]) / h1Closes[0]) * 100).toFixed(2))
-                : 0;
-            const h4Slope =
-              h4Closes.length > 1
-                ? Number((((h4Closes[h4Closes.length - 1] - h4Closes[0]) / h4Closes[0]) * 100).toFixed(2))
-                : 0;
-            toolResult = {
-              tf_1h_change_pct: h1Slope,
-              tf_4h_change_pct: h4Slope,
-              trend_1h: h1Slope >= 0 ? 'BULLISH' : 'BEARISH',
-              trend_4h: h4Slope >= -0.4 ? 'CONSTRUCTIVE' : 'WEAK',
-              aligned: rsi < 35 ? h4Slope > -1.5 : rsi > 65 ? h1Slope < 1.5 : false,
-            };
-          } else if (fc.name === 'calculate_dynamic_position_size') {
-            const conf = Number(args.preliminary_confidence ?? 78);
-            const atr = Number(args.atr_percent ?? atrPct);
-            const stake = Number(args.base_stake_usdt ?? baseStakeUsdt);
-            const confFactor = conf >= 85 ? 1.0 : conf >= 70 ? 0.7 : 0.4;
-            const volFactor = atr > 2.2 ? 0.75 : atr < 0.8 ? 1.1 : 1.0;
-            const multiplier = Number((confFactor * volFactor).toFixed(2));
-            toolResult = {
-              recommended_multiplier: multiplier,
-              recommended_stake_usdt: Number((stake * multiplier).toFixed(2)),
-              volatility_regime: atr > 2.2 ? 'HIGH' : 'NORMAL',
-            };
-          } else if (fc.name === 'post_trade_journal_summary') {
-            toolResult = {
-              recorded: true,
-              language,
-              note: String(args.summary_note || ''),
-            };
+      if (toolCalls.length > 0) {
+        messages.push(message1);
+        for (const tc of toolCalls) {
+          let tArgs: Record<string, unknown> = {};
+          try {
+            tArgs = JSON.parse(tc.function?.arguments || '{}');
+          } catch {
+            tArgs = {};
           }
-
+          const tRes = await executeSkill(tc.function?.name, tArgs);
           toolTrace.push({
-            skill: fc.name || 'unknown',
-            args,
-            result: toolResult,
+            skill: tc.function?.name || 'unknown',
+            args: tArgs,
+            result: tRes,
           });
-
-          functionResponses.push({
-            functionResponse: {
-              id: fc.id,
-              name: fc.name,
-              response: { output: toolResult },
-            },
+          messages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: JSON.stringify(tRes),
           });
         }
 
-        const previousContent = step1.candidates?.[0]?.content;
-        const step2 = await ai.models.generateContent({
+        const reqBody2 = {
+          model: targetModel,
+          messages,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+        };
+        const res2 = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(reqBody2),
+        });
+        if (!res2.ok) {
+          const errText2 = await res2.text();
+          throw new Error(`${aiProvider.toUpperCase()} Step 2 HTTP ${res2.status}: ${errText2}`);
+        }
+        const json2 = (await res2.json()) as any;
+        totalPromptTokens += json2.usage?.prompt_tokens ?? 0;
+        totalOutputTokens += json2.usage?.completion_tokens ?? 0;
+        rawJsonText = cleanJsonOutput(json2.choices?.[0]?.message?.content ?? '{}');
+      } else {
+        rawJsonText = cleanJsonOutput(message1?.content ?? '{}');
+      }
+    } else {
+      // Default: Gemini
+      const effectiveKey = body.customGeminiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+      if (!effectiveKey) {
+        res.status(400).json({
+          error: 'Gemini API key is not configured on the server or in Settings.',
+        });
+        return;
+      }
+
+      const ai = createGeminiClient(body.customGeminiKey);
+      const functionDeclarations: FunctionDeclaration[] = [];
+
+      if (enabledSkills.fetch_sentiment_and_fear_greed) {
+        functionDeclarations.push({
+          name: 'fetch_sentiment_and_fear_greed',
+          description: 'Fetch live crypto Fear & Greed Index and recent market sentiment headlines for the trading pair.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: { symbol: { type: Type.STRING, description: 'Base asset symbol, e.g. BTC or ETH' } },
+            required: ['symbol'],
+          },
+        });
+      }
+
+      if (enabledSkills.check_multi_timeframe_trend) {
+        functionDeclarations.push({
+          name: 'check_multi_timeframe_trend',
+          description: 'Inspect higher timeframe (1h and 4h) EMA trend alignment before approving a lower timeframe entry.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              pair: { type: Type.STRING, description: 'Trading pair such as BTC/USDT' },
+              lower_timeframe: { type: Type.STRING, description: 'Current signal timeframe, e.g. 15m' },
+            },
+            required: ['pair', 'lower_timeframe'],
+          },
+        });
+      }
+
+      if (enabledSkills.calculate_dynamic_position_size) {
+        functionDeclarations.push({
+          name: 'calculate_dynamic_position_size',
+          description: 'Calculate adjusted USDT stake size based on preliminary signal confidence and ATR volatility.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              preliminary_confidence: { type: Type.NUMBER, description: 'Confidence 0 to 100' },
+              atr_percent: { type: Type.NUMBER, description: 'ATR volatility percentage' },
+              base_stake_usdt: { type: Type.NUMBER, description: 'Default stake amount in USDT' },
+            },
+            required: ['preliminary_confidence', 'atr_percent', 'base_stake_usdt'],
+          },
+        });
+      }
+
+      if (enabledSkills.post_trade_journal_summary) {
+        functionDeclarations.push({
+          name: 'post_trade_journal_summary',
+          description: 'Generate a concise 1-sentence localized journal entry summarizing the technical and sentiment rationale.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              pair: { type: Type.STRING, description: 'Trading pair' },
+              proposed_action: { type: Type.STRING, description: 'BUY, SELL, or HOLD' },
+              summary_note: { type: Type.STRING, description: '1-sentence rationale in the requested UI language' },
+            },
+            required: ['pair', 'proposed_action', 'summary_note'],
+          },
+        });
+      }
+
+      if (functionDeclarations.length > 0) {
+        const step1 = await ai.models.generateContent({
           model: 'gemini-4-hydrogen',
-          contents: [
-            { role: 'user', parts: [{ text: userPrompt }] },
-            ...(previousContent ? [previousContent] : []),
-            { role: 'user', parts: functionResponses },
-          ],
+          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
           config: {
             systemInstruction,
-            responseMimeType: 'application/json',
+            tools: [{ functionDeclarations }],
             thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                action: { type: Type.STRING, description: 'BUY, SELL, or HOLD' },
-                confidence: { type: Type.INTEGER, description: 'Confidence score 0 to 100' },
-                reasoning: { type: Type.STRING, description: `Concise reasoning in ${languageName}` },
-                position_multiplier: { type: Type.NUMBER, description: 'Stake multiplier e.g. 0.75 or 1.0' },
-                journal_note: { type: Type.STRING, description: `1-sentence journal summary in ${languageName}` },
-              },
-              required: ['action', 'confidence', 'reasoning', 'position_multiplier', 'journal_note'],
-            },
           },
         });
 
-        totalPromptTokens += step2.usageMetadata?.promptTokenCount ?? 0;
-        totalOutputTokens += step2.usageMetadata?.candidatesTokenCount ?? 0;
-        rawJsonText = (step2.text ?? '{}').trim();
-      } else {
-        // Model returned direct answer without invoking tools; enforce structured JSON if needed
-        const text = (step1.text ?? '').trim();
-        if (text.startsWith('{')) {
-          rawJsonText = text;
-        } else {
-          const stepFormat = await ai.models.generateContent({
+        totalPromptTokens += step1.usageMetadata?.promptTokenCount ?? 0;
+        totalOutputTokens += step1.usageMetadata?.candidatesTokenCount ?? 0;
+
+        const functionCalls = step1.functionCalls ?? [];
+
+        if (functionCalls.length > 0) {
+          const functionResponses = [];
+
+          for (const fc of functionCalls) {
+            const args = (fc.args ?? {}) as Record<string, unknown>;
+            const toolResult = await executeSkill(fc.name || '', args);
+
+            toolTrace.push({
+              skill: fc.name || 'unknown',
+              args,
+              result: toolResult,
+            });
+
+            functionResponses.push({
+              functionResponse: {
+                id: fc.id,
+                name: fc.name,
+                response: { output: toolResult },
+              },
+            });
+          }
+
+          const previousContent = step1.candidates?.[0]?.content;
+          const step2 = await ai.models.generateContent({
             model: 'gemini-4-hydrogen',
-            contents: `Convert this analysis into strict JSON:\n${text}\n\nOriginal request:\n${userPrompt}`,
+            contents: [
+              { role: 'user', parts: [{ text: userPrompt }] },
+              ...(previousContent ? [previousContent] : []),
+              { role: 'user', parts: functionResponses },
+            ],
             config: {
               systemInstruction,
               responseMimeType: 'application/json',
@@ -636,45 +924,75 @@ Keep explanations concise (max 2 sentences).`;
               responseSchema: {
                 type: Type.OBJECT,
                 properties: {
-                  action: { type: Type.STRING },
-                  confidence: { type: Type.INTEGER },
-                  reasoning: { type: Type.STRING },
-                  position_multiplier: { type: Type.NUMBER },
-                  journal_note: { type: Type.STRING },
+                  action: { type: Type.STRING, description: 'BUY, SELL, or HOLD' },
+                  confidence: { type: Type.INTEGER, description: 'Confidence score 0 to 100' },
+                  reasoning: { type: Type.STRING, description: `Concise reasoning in ${languageName}` },
+                  position_multiplier: { type: Type.NUMBER, description: 'Stake multiplier e.g. 0.75 or 1.0' },
+                  journal_note: { type: Type.STRING, description: `1-sentence journal summary in ${languageName}` },
                 },
                 required: ['action', 'confidence', 'reasoning', 'position_multiplier', 'journal_note'],
               },
             },
           });
-          totalPromptTokens += stepFormat.usageMetadata?.promptTokenCount ?? 0;
-          totalOutputTokens += stepFormat.usageMetadata?.candidatesTokenCount ?? 0;
-          rawJsonText = (stepFormat.text ?? '{}').trim();
+
+          totalPromptTokens += step2.usageMetadata?.promptTokenCount ?? 0;
+          totalOutputTokens += step2.usageMetadata?.candidatesTokenCount ?? 0;
+          rawJsonText = cleanJsonOutput(step2.text ?? '{}');
+        } else {
+          const text = cleanJsonOutput(step1.text ?? '');
+          if (text.startsWith('{')) {
+            rawJsonText = text;
+          } else {
+            const stepFormat = await ai.models.generateContent({
+              model: 'gemini-4-hydrogen',
+              contents: `Convert this analysis into strict JSON:\n${text}\n\nOriginal request:\n${userPrompt}`,
+              config: {
+                systemInstruction,
+                responseMimeType: 'application/json',
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    action: { type: Type.STRING },
+                    confidence: { type: Type.INTEGER },
+                    reasoning: { type: Type.STRING },
+                    position_multiplier: { type: Type.NUMBER },
+                    journal_note: { type: Type.STRING },
+                  },
+                  required: ['action', 'confidence', 'reasoning', 'position_multiplier', 'journal_note'],
+                },
+              },
+            });
+            totalPromptTokens += stepFormat.usageMetadata?.promptTokenCount ?? 0;
+            totalOutputTokens += stepFormat.usageMetadata?.candidatesTokenCount ?? 0;
+            rawJsonText = cleanJsonOutput(stepFormat.text ?? '{}');
+          }
         }
-      }
-    } else {
-      const direct = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              action: { type: Type.STRING },
-              confidence: { type: Type.INTEGER },
-              reasoning: { type: Type.STRING },
-              position_multiplier: { type: Type.NUMBER },
-              journal_note: { type: Type.STRING },
+      } else {
+        const direct = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                action: { type: Type.STRING },
+                confidence: { type: Type.INTEGER },
+                reasoning: { type: Type.STRING },
+                position_multiplier: { type: Type.NUMBER },
+                journal_note: { type: Type.STRING },
+              },
+              required: ['action', 'confidence', 'reasoning', 'position_multiplier', 'journal_note'],
             },
-            required: ['action', 'confidence', 'reasoning', 'position_multiplier', 'journal_note'],
           },
-        },
-      });
-      totalPromptTokens += direct.usageMetadata?.promptTokenCount ?? 0;
-      totalOutputTokens += direct.usageMetadata?.candidatesTokenCount ?? 0;
-      rawJsonText = (direct.text ?? '{}').trim();
+        });
+        totalPromptTokens += direct.usageMetadata?.promptTokenCount ?? 0;
+        totalOutputTokens += direct.usageMetadata?.candidatesTokenCount ?? 0;
+        rawJsonText = cleanJsonOutput(direct.text ?? '{}');
+      }
     }
 
     const parsed = JSON.parse(rawJsonText) as {
@@ -723,13 +1041,17 @@ Keep explanations concise (max 2 sentences).`;
       },
       fearGreed: fng,
       marketSource,
+      provider: aiProvider,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Gemini simulation failed';
+    const msg = err instanceof Error ? err.message : 'AI simulation failed';
     res.status(500).json({ error: msg });
   }
-});
+};
+
+app.post('/api/gemini/simulate', simulateHandler);
+app.post('/api/ai/simulate', simulateHandler);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

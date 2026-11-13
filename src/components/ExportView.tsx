@@ -44,7 +44,7 @@ export function ExportView({
   const files = useMemo<Record<FileId, string>>(
     () => ({
       'config.json': generateConfigJson(settings, strategy),
-      'GeminiHybridStrategy.py': generateStrategyPy(strategy, tokenOpt, feeds, skills, language),
+      'GeminiHybridStrategy.py': generateStrategyPy(settings, strategy, tokenOpt, feeds, skills, language),
       Dockerfile: generateDockerfile(),
       'docker-compose.yml': generateDockerCompose(settings),
     }),

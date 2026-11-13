@@ -6,11 +6,13 @@
 [![Vite](https://img.shields.io/badge/Vite-8.3-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-000000?logo=express&logoColor=white)](https://expressjs.com/)
 [![Google Gemini API](https://img.shields.io/badge/Google_Gemini-2.5_Flash-8E75B2?logo=google-gemini&logoColor=white)](https://ai.google.dev/)
+[![Groq](https://img.shields.io/badge/Groq-Llama_3.3_70B-F55036?logo=groq&logoColor=white)](https://groq.com/)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-DeepSeek_R1-6366F1)](https://openrouter.ai/)
 [![Freqtrade](https://img.shields.io/badge/Freqtrade-Stable-1E40AF)](https://www.freqtrade.io/)
 [![OKX](https://img.shields.io/badge/OKX-API_v5-black?logo=okx&logoColor=white)](https://www.okx.com/)
 [![i18n](https://img.shields.io/badge/i18n-EN%20%7C%20TR-emerald)](https://github.com/)
 
-**NexusQuant AI** is an enterprise-grade quantitative trading companion, AI signal validation engine, and automated deployment generator built for **Freqtrade** crypto bots executing on the **OKX** spot exchange. Powered by Google's Gemini models and structured around a strict **Zero-Waste Token Optimization Architecture**, it bridges the gap between classic algorithmic technical indicators and multi-modal AI reasoning.
+**NexusQuant AI** is an enterprise-grade quantitative trading companion, multi-model AI signal validation engine, and automated deployment generator built for **Freqtrade** crypto bots executing on the **OKX** spot exchange. Supporting **Google Gemini**, **Groq** (ultra-low latency), **OpenRouter** (universal model gateway), and custom OpenAI-compatible endpoints, it features a sleek header navigation layout and a strict **Zero-Waste Token Optimization Architecture**.
 
 ---
 

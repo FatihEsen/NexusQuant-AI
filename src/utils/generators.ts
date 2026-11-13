@@ -79,12 +79,18 @@ export function generateConfigJson(
 }
 
 export function generateStrategyPy(
+  settings: ApiSettings,
   strategy: StrategyConfig,
   tokenOpt: TokenOptimizationConfig,
   feeds: DataFeedsConfig,
   skills: ModularSkillsConfig,
   language: Language
 ): string {
+  const isGroq = settings.aiProvider === 'groq';
+  const isOpenRouter = settings.aiProvider === 'openrouter';
+  const isCustom = settings.aiProvider === 'custom';
+  const isOpenAiCompatible = isGroq || isOpenRouter || isCustom;
+
   const activeSkillMethods: string[] = [];
   const toolDeclarations: string[] = [];
 
@@ -251,8 +257,57 @@ class GeminiHybridStrategy(IStrategy):
 
     def _get_gemini_client(self) -> genai.Client:
         if self._client is None:
-            self._client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
         return self._client
+
+    def _call_ai_decision(self, prompt: str) -> GeminiDecision:
+${
+  isOpenAiCompatible
+    ? `        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {os.environ.get('${isGroq ? 'GROQ_API_KEY' : isOpenRouter ? 'OPENROUTER_API_KEY' : 'CUSTOM_API_KEY'}', '')}",
+        }
+        payload = {
+            "model": "${
+              isGroq
+                ? settings.groqModel || 'llama-3.3-70b-versatile'
+                : isOpenRouter
+                  ? settings.openRouterModel || 'deepseek/deepseek-r1'
+                  : settings.customModel || 'llama3'
+            }",
+            "messages": [
+                {"role": "system", "content": f"Validate OKX entry. Return strict JSON with keys: action (BUY|SELL|HOLD), confidence (0-100), reasoning (in {self.UI_LANGUAGE}), journal_note (in {self.UI_LANGUAGE})."},
+                {"role": "user", "content": prompt}
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.1
+        }
+        endpoint = "${
+          isGroq
+            ? 'https://api.groq.com/openai/v1/chat/completions'
+            : isOpenRouter
+              ? 'https://openrouter.ai/api/v1/chat/completions'
+              : (settings.customApiBaseUrl || 'http://localhost:11434/v1').replace(/\/+$/, '') + '/chat/completions'
+        }"
+        res = requests.post(endpoint, headers=headers, json=payload, timeout=8)
+        res.raise_for_status()
+        content = res.json()["choices"][0]["message"]["content"]
+        data = json.loads(content)
+        return GeminiDecision(**data)`
+    : `        client = self._get_gemini_client()
+        response = client.models.generate_content(
+            model="${settings.geminiModel || 'gemini-2.5-flash'}",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    f"Validate OKX entry. Respond in {self.UI_LANGUAGE} JSON matching GeminiDecision."
+                ),
+                response_mime_type="application/json",
+                response_schema=GeminiDecision,
+            ),
+        )
+        return GeminiDecision.model_validate_json(response.text)`
+}
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         delta = dataframe["close"].diff()
@@ -342,19 +397,7 @@ ${skillCallsSnippet}
         )
 
         try:
-            client = self._get_gemini_client()
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=(
-                        f"Validate OKX entry. Respond in {self.UI_LANGUAGE} JSON matching GeminiDecision."
-                    ),
-                    response_mime_type="application/json",
-                    response_schema=GeminiDecision,
-                ),
-            )
-            decision = GeminiDecision.model_validate_json(response.text)
+            decision = self._call_ai_decision(prompt)
             approved = decision.action.upper() == "BUY" and decision.confidence >= self.CONFIDENCE_THRESHOLD
             self._decision_cache[pair] = {
                 "ts": now_ts,
@@ -365,7 +408,7 @@ ${skillCallsSnippet}
 ${journalSnippet}
             return approved
         except Exception as exc:
-            logger.error("Gemini validation failed for %s: %s", pair, exc)
+            logger.error("AI validation failed for %s: %s", pair, exc)
             return False
 ${customStakeMethod}
 `;
@@ -400,7 +443,12 @@ export function generateDockerCompose(settings: ApiSettings): string {
     ports:
       - "127.0.0.1:8080:8080"
     environment:
+      - AI_PROVIDER=${settings.aiProvider || 'gemini'}
       - GEMINI_API_KEY=${settings.geminiApiKey || '${GEMINI_API_KEY}'}
+      - GROQ_API_KEY=${settings.groqApiKey || '${GROQ_API_KEY}'}
+      - OPENROUTER_API_KEY=${settings.openRouterApiKey || '${OPENROUTER_API_KEY}'}
+      - CUSTOM_API_KEY=${settings.customApiKey || ''}
+      - CUSTOM_API_BASE_URL=${settings.customApiBaseUrl || ''}
       - OKX_API_KEY=${settings.okxApiKey || '${OKX_API_KEY}'}
       - OKX_SECRET_KEY=${settings.okxSecretKey || '${OKX_SECRET_KEY}'}
       - OKX_PASSPHRASE=${settings.okxPassphrase || '${OKX_PASSPHRASE}'}

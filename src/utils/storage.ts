@@ -21,7 +21,16 @@ const KEYS = {
 };
 
 export const DEFAULT_API_SETTINGS: ApiSettings = {
+  aiProvider: 'gemini',
   geminiApiKey: '',
+  geminiModel: 'gemini-2.5-flash',
+  groqApiKey: '',
+  groqModel: 'llama-3.3-70b-versatile',
+  openRouterApiKey: '',
+  openRouterModel: 'deepseek/deepseek-r1',
+  customApiBaseUrl: 'http://localhost:11434/v1',
+  customApiKey: '',
+  customModel: 'llama3',
   okxApiKey: '',
   okxSecretKey: '',
   okxPassphrase: '',

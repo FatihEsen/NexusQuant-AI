@@ -159,6 +159,15 @@ export function SimulatorView({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          aiProvider: settings.aiProvider,
+          model:
+            settings.aiProvider === 'groq'
+              ? settings.groqModel
+              : settings.aiProvider === 'openrouter'
+                ? settings.openRouterModel
+                : settings.aiProvider === 'custom'
+                  ? settings.customModel
+                  : settings.geminiModel,
           pair,
           timeframe,
           language,
@@ -172,6 +181,10 @@ export function SimulatorView({
           feeds,
           enabledSkills: skills,
           customGeminiKey: settings.geminiApiKey || undefined,
+          customGroqKey: settings.groqApiKey || undefined,
+          customOpenRouterKey: settings.openRouterApiKey || undefined,
+          customApiKey: settings.customApiKey || undefined,
+          customApiBaseUrl: settings.customApiBaseUrl || undefined,
           compactCsv: scenario === 'live_okx' ? undefined : scenarioMetrics.compactCsv,
           rawJsonChars: Math.round(scenarioMetrics.rawChars),
         }),
@@ -256,11 +269,27 @@ export function SimulatorView({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-slate-100">
-          {t.simulator.title}
-        </h2>
-        <p className="mt-1 text-sm text-slate-400 max-w-3xl">{t.simulator.subtitle}</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-100">
+            {t.simulator.title}
+          </h2>
+          <p className="mt-1 text-sm text-slate-400 max-w-3xl">{t.simulator.subtitle}</p>
+        </div>
+        <div className="flex items-center gap-2 self-start sm:self-auto px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono shadow-xs">
+          <span className="text-slate-400">Engine:</span>
+          <span className="text-emerald-400 font-semibold uppercase">{settings.aiProvider}</span>
+          <span className="text-slate-600">/</span>
+          <span className="text-slate-200 truncate max-w-[160px]">
+            {settings.aiProvider === 'groq'
+              ? settings.groqModel
+              : settings.aiProvider === 'openrouter'
+                ? settings.openRouterModel
+                : settings.aiProvider === 'custom'
+                  ? settings.customModel
+                  : settings.geminiModel}
+          </span>
+        </div>
       </div>
 
       {/* Interactive Workbench */}

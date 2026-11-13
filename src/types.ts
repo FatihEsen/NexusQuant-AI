@@ -4,8 +4,20 @@ export type NavTab = 'dashboard' | 'simulator' | 'export' | 'settings';
 
 export type StorageKind = 'localStorage' | 'sessionStorage';
 
+export type AiProvider = 'gemini' | 'groq' | 'openrouter' | 'custom';
+
 export interface ApiSettings {
+  aiProvider: AiProvider;
   geminiApiKey: string;
+  geminiModel: string;
+  groqApiKey: string;
+  groqModel: string;
+  openRouterApiKey: string;
+  openRouterModel: string;
+  customApiBaseUrl: string;
+  customApiKey: string;
+  customModel: string;
+
   okxApiKey: string;
   okxSecretKey: string;
   okxPassphrase: string;
@@ -98,7 +110,8 @@ export interface MarketPulseData {
 }
 
 export interface ConnectionTestResult {
-  gemini: { ok: boolean; mode: 'live' | 'env' | 'missing'; detail: string };
+  ai: { ok: boolean; provider: AiProvider; mode: string; detail: string };
+  gemini?: { ok: boolean; mode: 'live' | 'env' | 'missing'; detail: string };
   okx: { ok: boolean; mode: 'public_ok' | 'keys_incomplete'; detail: string };
   freqtrade: { ok: boolean; reachable: boolean; detail: string };
   checkedAt: string;

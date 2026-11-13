@@ -3,7 +3,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { DashboardView } from './components/DashboardView';
 import { ExportView } from './components/ExportView';
 import { SettingsView } from './components/SettingsView';
-import { Sidebar } from './components/Sidebar';
 import { SimulatorView } from './components/SimulatorView';
 import { TopBar } from './components/TopBar';
 import {
@@ -121,26 +120,19 @@ export default function App() {
   const activeSkillsCount = Object.values(skills).filter(Boolean).length;
 
   return (
-    <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col lg:flex-row">
-      <Sidebar
+    <div className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col">
+      <TopBar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         language={language}
+        onChangeLanguage={handleChangeLanguage}
         settings={settings}
+        marketPulse={marketPulse}
         strategy={strategy}
         activeSkillsCount={activeSkillsCount}
       />
 
-      <div className="flex-1 min-w-0 flex flex-col">
-        <TopBar
-          activeTab={activeTab}
-          language={language}
-          onChangeLanguage={handleChangeLanguage}
-          settings={settings}
-          marketPulse={marketPulse}
-        />
-
-        <main className="flex-1 p-5 sm:p-7 max-w-[1440px] w-full mx-auto">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -203,7 +195,6 @@ export default function App() {
             </motion.div>
           </AnimatePresence>
         </main>
-      </div>
     </div>
   );
 }

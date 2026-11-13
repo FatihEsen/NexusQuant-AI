@@ -1,7 +1,19 @@
 import { useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, RefreshCw, ShieldAlert, Trash2, Wifi } from 'lucide-react';
+import {
+  Bot,
+  CheckCircle2,
+  Cpu,
+  Eye,
+  EyeOff,
+  Globe,
+  RefreshCw,
+  ShieldAlert,
+  Trash2,
+  Wifi,
+  Zap,
+} from 'lucide-react';
 import { getT } from '../i18n/translations';
-import { ApiSettings, ConnectionTestResult, Language, StorageKind } from '../types';
+import { AiProvider, ApiSettings, ConnectionTestResult, Language, StorageKind } from '../types';
 
 interface SettingsViewProps {
   language: Language;
@@ -31,13 +43,13 @@ function SecretInput({ label, value, onChange, placeholder, hint }: SecretInputP
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           autoComplete="off"
-          className="w-full pl-3 pr-10 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500"
+          className="w-full pl-3 pr-10 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
         />
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
           aria-label={visible ? 'Hide secret' : 'Show secret'}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-100 transition-colors"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-100 transition-colors cursor-pointer"
         >
           {visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
@@ -71,6 +83,9 @@ export function SettingsView({
     const emptyDraft: ApiSettings = {
       ...draft,
       geminiApiKey: '',
+      groqApiKey: '',
+      openRouterApiKey: '',
+      customApiKey: '',
       okxApiKey: '',
       okxSecretKey: '',
       okxPassphrase: '',
@@ -94,6 +109,12 @@ export function SettingsView({
       });
       const data = await res.json();
       setTestResult({
+        ai: data.ai || {
+          ok: data.gemini?.ok ?? false,
+          provider: draft.aiProvider,
+          mode: data.gemini?.mode ?? 'env',
+          detail: data.gemini?.detail ?? 'Tested',
+        },
         gemini: data.gemini,
         okx: data.okx,
         freqtrade: data.freqtrade,
@@ -101,6 +122,7 @@ export function SettingsView({
       });
     } catch {
       setTestResult({
+        ai: { ok: false, provider: draft.aiProvider, mode: 'missing', detail: 'Network error contacting server' },
         gemini: { ok: false, mode: 'missing', detail: 'Network error contacting server' },
         okx: { ok: false, mode: 'keys_incomplete', detail: 'Could not reach server' },
         freqtrade: { ok: false, reachable: false, detail: 'Could not reach server' },
@@ -110,6 +132,33 @@ export function SettingsView({
       setTesting(false);
     }
   };
+
+  const providers: Array<{ id: AiProvider; label: string; sub: string; icon: typeof Bot }> = [
+    {
+      id: 'gemini',
+      label: 'Google Gemini',
+      sub: 'Gemini 2.5 Flash / Flash Lite',
+      icon: Bot,
+    },
+    {
+      id: 'groq',
+      label: 'Groq Cloud',
+      sub: 'Llama 3.3 70B / DeepSeek R1',
+      icon: Zap,
+    },
+    {
+      id: 'openrouter',
+      label: 'OpenRouter',
+      sub: 'All Frontier & Open Models',
+      icon: Globe,
+    },
+    {
+      id: 'custom',
+      label: 'Custom API',
+      sub: 'Local Ollama / vLLM / Proxy',
+      icon: Cpu,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -125,7 +174,7 @@ export function SettingsView({
           onSubmit={handleSave}
           className="xl:col-span-7 bg-[#0F1522] border border-slate-800/90 rounded-xl p-6 space-y-6"
         >
-          {/* Trading Mode */}
+          {/* Trading Execution Mode */}
           <div className="space-y-3">
             <div className="text-sm font-semibold text-slate-100">
               {t.settings.tradingModeTitle}
@@ -134,7 +183,7 @@ export function SettingsView({
               <button
                 type="button"
                 onClick={() => setDraft({ ...draft, tradingMode: 'dry_run' })}
-                className={`p-3.5 rounded-lg border text-left transition-colors ${
+                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
                   draft.tradingMode === 'dry_run'
                     ? 'bg-emerald-500/10 border-emerald-500/40'
                     : 'bg-slate-950 border-slate-800 hover:border-slate-700'
@@ -149,7 +198,7 @@ export function SettingsView({
               <button
                 type="button"
                 onClick={() => setDraft({ ...draft, tradingMode: 'live' })}
-                className={`p-3.5 rounded-lg border text-left transition-colors ${
+                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
                   draft.tradingMode === 'live'
                     ? 'bg-rose-500/10 border-rose-500/40'
                     : 'bg-slate-950 border-slate-800 hover:border-slate-700'
@@ -170,21 +219,166 @@ export function SettingsView({
             )}
           </div>
 
-          {/* Gemini Section */}
+          {/* AI Engine & Model Provider Section */}
           <div className="pt-4 border-t border-slate-800/80 space-y-4">
-            <h3 className="text-sm font-semibold text-slate-100">
-              {t.settings.geminiSection}
-            </h3>
-            <SecretInput
-              label={t.settings.geminiKeyLabel}
-              value={draft.geminiApiKey}
-              onChange={(val) => setDraft({ ...draft, geminiApiKey: val })}
-              placeholder="AIzaSy..."
-              hint={t.settings.geminiKeyHint}
-            />
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+                <Bot className="w-4 h-4 text-emerald-400" />
+                <span>{t.settings.aiSectionTitle}</span>
+              </h3>
+              <p className="mt-1 text-xs text-slate-400">{t.settings.aiSectionDesc}</p>
+            </div>
+
+            {/* Provider Selector Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {providers.map((p) => {
+                const Icon = p.icon;
+                const isSelected = draft.aiProvider === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setDraft({ ...draft, aiProvider: p.id })}
+                    className={`p-3 rounded-lg border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                      isSelected
+                        ? 'bg-emerald-500/10 border-emerald-500/50 shadow-sm shadow-emerald-950/40'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div
+                      className={`p-2 rounded-lg shrink-0 ${
+                        isSelected ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-900 text-slate-400'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-slate-100 truncate">{p.label}</div>
+                      <div className="text-[11px] text-slate-400 truncate">{p.sub}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Provider-Specific Form Inputs */}
+            {draft.aiProvider === 'gemini' && (
+              <div className="space-y-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <SecretInput
+                  label={t.settings.geminiKeyLabel}
+                  value={draft.geminiApiKey}
+                  onChange={(val) => setDraft({ ...draft, geminiApiKey: val })}
+                  placeholder="AIzaSy..."
+                  hint={t.settings.geminiKeyHint}
+                />
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    {t.settings.modelLabel}
+                  </label>
+                  <select
+                    value={draft.geminiModel}
+                    onChange={(e) => setDraft({ ...draft, geminiModel: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended · Fast & Smart)</option>
+                    <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Ultra Lightweight)</option>
+                    <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {draft.aiProvider === 'groq' && (
+              <div className="space-y-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <SecretInput
+                  label={t.settings.groqKeyLabel}
+                  value={draft.groqApiKey}
+                  onChange={(val) => setDraft({ ...draft, groqApiKey: val })}
+                  placeholder="gsk_..."
+                  hint={t.settings.groqKeyHint}
+                />
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    {t.settings.modelLabel}
+                  </label>
+                  <select
+                    value={draft.groqModel}
+                    onChange={(e) => setDraft({ ...draft, groqModel: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
+                    <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b (Reasoning)</option>
+                    <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
+                    <option value="gemma2-9b-it">gemma2-9b-it</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {draft.aiProvider === 'openrouter' && (
+              <div className="space-y-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <SecretInput
+                  label={t.settings.openRouterKeyLabel}
+                  value={draft.openRouterApiKey}
+                  onChange={(val) => setDraft({ ...draft, openRouterApiKey: val })}
+                  placeholder="sk-or-v1-..."
+                  hint={t.settings.openRouterKeyHint}
+                />
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    {t.settings.modelLabel}
+                  </label>
+                  <select
+                    value={draft.openRouterModel}
+                    onChange={(e) => setDraft({ ...draft, openRouterModel: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    <option value="deepseek/deepseek-r1">deepseek/deepseek-r1 (Frontier Reasoning)</option>
+                    <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
+                    <option value="meta-llama/llama-3.3-70b-instruct">meta-llama/llama-3.3-70b-instruct</option>
+                    <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {draft.aiProvider === 'custom' && (
+              <div className="space-y-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    {t.settings.customBaseUrlLabel}
+                  </label>
+                  <input
+                    type="url"
+                    value={draft.customApiBaseUrl}
+                    onChange={(e) => setDraft({ ...draft, customApiBaseUrl: e.target.value })}
+                    placeholder="http://localhost:11434/v1"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <SecretInput
+                  label={t.settings.customKeyLabel}
+                  value={draft.customApiKey}
+                  onChange={(val) => setDraft({ ...draft, customApiKey: val })}
+                  placeholder="optional-bearer-token"
+                />
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    {t.settings.customModelLabel}
+                  </label>
+                  <input
+                    type="text"
+                    value={draft.customModel}
+                    onChange={(e) => setDraft({ ...draft, customModel: e.target.value })}
+                    placeholder="llama3"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* OKX Section */}
+          {/* OKX Exchange Section */}
           <div className="pt-4 border-t border-slate-800/80 space-y-4">
             <h3 className="text-sm font-semibold text-slate-100">{t.settings.okxSection}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -250,32 +444,34 @@ export function SettingsView({
                 label={t.settings.freqtradePass}
                 value={draft.freqtradePassword}
                 onChange={(val) => setDraft({ ...draft, freqtradePassword: val })}
-                placeholder="freqtrade-api-password"
+                placeholder="••••••••"
               />
             </div>
           </div>
 
-          {/* Storage Preference & Actions */}
+          {/* Storage Kind & Submit Buttons */}
           <div className="pt-4 border-t border-slate-800/80 space-y-4">
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-2">
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
                 {t.settings.storageLabel}
               </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {(['localStorage', 'sessionStorage'] as StorageKind[]).map((kind) => (
                   <button
                     key={kind}
                     type="button"
                     onClick={() => setDraft({ ...draft, storageKind: kind })}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium transition-colors text-left ${
+                    className={`p-3 rounded-lg border text-left text-xs transition-colors cursor-pointer ${
                       draft.storageKind === kind
-                        ? 'bg-emerald-500/12 border-emerald-500/40 text-emerald-300'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                        ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
-                    {kind === 'localStorage'
-                      ? t.settings.localStorageOpt
-                      : t.settings.sessionStorageOpt}
+                    <div className="font-semibold text-slate-200">
+                      {kind === 'localStorage'
+                        ? t.settings.localStorageOpt
+                        : t.settings.sessionStorageOpt}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -291,7 +487,7 @@ export function SettingsView({
               <button
                 type="button"
                 onClick={handleClear}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-700 hover:border-rose-500/50 text-xs font-medium text-slate-300 hover:text-rose-300 transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-700 hover:border-rose-500/50 text-xs font-medium text-slate-300 hover:text-rose-300 transition-colors cursor-pointer whitespace-nowrap"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{t.settings.clearKeys}</span>
@@ -302,14 +498,14 @@ export function SettingsView({
                   type="button"
                   disabled={testing}
                   onClick={handleTestConnection}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-700 hover:border-slate-500 text-xs font-semibold text-slate-100 transition-colors whitespace-nowrap disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-700 hover:border-slate-500 text-xs font-semibold text-slate-100 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${testing ? 'animate-spin' : ''}`} />
                   <span>{testing ? t.settings.testingButton : t.settings.testButton}</span>
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold transition-colors whitespace-nowrap"
+                  className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
                 >
                   {t.settings.saveButton}
                 </button>
@@ -338,25 +534,28 @@ export function SettingsView({
             {!testResult ? (
               <p className="text-xs text-slate-400 leading-relaxed">
                 {language === 'tr'
-                  ? 'Gemini API anahtarını, OKX genel borsa erişimini ve özel Tailscale/VPN Freqtrade uç noktasını doğrulamak için Bağlantıyı Test Et düğmesine tıklayın.'
-                  : 'Click Test Connection to verify Gemini API access, OKX market REST availability, and your private Tailscale/VPN Freqtrade endpoint.'}
+                  ? 'Seçili AI sağlayıcısını (Gemini, Groq, OpenRouter), OKX genel borsa erişimini ve özel Tailscale/VPN Freqtrade uç noktasını doğrulamak için Bağlantıyı Test Et düğmesine tıklayın.'
+                  : 'Click Test Connection to verify your active AI provider (Gemini, Groq, OpenRouter), OKX market REST availability, and private Freqtrade endpoint.'}
               </p>
             ) : (
               <div className="space-y-3 text-xs">
+                {/* AI Provider Status Card */}
                 <div className="p-3 rounded-lg bg-slate-950 border border-slate-800/80 space-y-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-mono font-semibold text-slate-200">Gemini API</span>
+                    <span className="font-mono font-semibold text-slate-200 uppercase">
+                      AI: {testResult.ai?.provider || draft.aiProvider}
+                    </span>
                     <span
                       className={`font-mono font-semibold ${
-                        testResult.gemini.ok ? 'text-emerald-400' : 'text-rose-400'
+                        testResult.ai?.ok ? 'text-emerald-400' : 'text-rose-400'
                       }`}
                     >
-                      {testResult.gemini.ok
+                      {testResult.ai?.ok
                         ? t.settings.statusLabels.connected
                         : t.settings.statusLabels.error}
                     </span>
                   </div>
-                  <p className="text-slate-400">{testResult.gemini.detail}</p>
+                  <p className="text-slate-400">{testResult.ai?.detail}</p>
                 </div>
 
                 <div className="p-3 rounded-lg bg-slate-950 border border-slate-800/80 space-y-1">
