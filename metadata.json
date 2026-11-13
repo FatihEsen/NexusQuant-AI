@@ -1,0 +1,8 @@
+{
+  "name": "NexusQuant AI — Freqtrade & OKX Control",
+  "description": "Multi-language configuration, AI signal validation, and Docker deployment generator for Freqtrade + OKX crypto trading bots powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
