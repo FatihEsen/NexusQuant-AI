@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import {
   Bot,
+  Check,
   CheckCircle2,
   Cpu,
+  Edit3,
   Eye,
   EyeOff,
   Globe,
+  ListFilter,
   RefreshCw,
   ShieldAlert,
   Trash2,
@@ -59,6 +62,112 @@ function SecretInput({ label, value, onChange, placeholder, hint }: SecretInputP
   );
 }
 
+function formatModelLabel(opt: string): string {
+  if (opt.endsWith(':free')) return `[FREE] ${opt}`;
+  if (opt === 'llama-3.3-70b-versatile') return `[FREE] llama-3.3-70b-versatile (Recommended · Tool Calling)`;
+  if (opt === 'llama-3.1-8b-instant') return `[FREE] llama-3.1-8b-instant (Ultra Fast · Tool Calling)`;
+  if (opt === 'mixtral-8x7b-32768') return `[FREE] mixtral-8x7b-32768 (Tool Calling)`;
+  if (opt === 'gemma2-9b-it') return `[FREE] gemma2-9b-it (Auto Prompt Fallback)`;
+  if (opt === 'qwen-2.5-32b') return `[FREE] qwen-2.5-32b (Auto Prompt Fallback)`;
+  if (opt === 'gemini-2.5-flash') return `[FREE TIER] gemini-2.5-flash (Recommended · Tool Calling)`;
+  if (opt === 'gemini-2.5-flash-lite') return `[FREE TIER] gemini-2.5-flash-lite (Ultra Lightweight)`;
+  return opt;
+}
+
+interface ModelControlProps {
+  provider: AiProvider;
+  currentModel: string;
+  onChangeModel: (model: string) => void;
+  options: string[];
+  isFetching: boolean;
+  onFetch: () => void;
+  isCustomInput: boolean;
+  onToggleCustomInput: () => void;
+  label: string;
+  fetchText: string;
+  fetchingText: string;
+  customToggleText: string;
+  listToggleText: string;
+}
+
+function ModelControl({
+  provider,
+  currentModel,
+  onChangeModel,
+  options,
+  isFetching,
+  onFetch,
+  isCustomInput,
+  onToggleCustomInput,
+  label,
+  fetchText,
+  fetchingText,
+  customToggleText,
+  listToggleText,
+}: ModelControlProps) {
+  const displayOptions = Array.from(new Set([currentModel, ...options])).filter(Boolean);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs font-medium text-slate-300">{label}</label>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleCustomInput}
+            className="text-[11px] text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition-colors cursor-pointer"
+            title={isCustomInput ? listToggleText : customToggleText}
+          >
+            {isCustomInput ? (
+              <>
+                <ListFilter className="w-3 h-3 text-emerald-400" />
+                <span className="text-emerald-400">{listToggleText}</span>
+              </>
+            ) : (
+              <>
+                <Edit3 className="w-3 h-3" />
+                <span>{customToggleText}</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onFetch}
+            disabled={isFetching}
+            className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors disabled:opacity-50 cursor-pointer"
+            title="Fetch live active models from API"
+          >
+            <RefreshCw className={`w-3 h-3 ${isFetching ? 'animate-spin' : ''}`} />
+            <span>{isFetching ? fetchingText : fetchText}</span>
+          </button>
+        </div>
+      </div>
+
+      {isCustomInput ? (
+        <input
+          type="text"
+          value={currentModel}
+          onChange={(e) => onChangeModel(e.target.value)}
+          placeholder={provider === 'groq' ? 'llama-3.3-70b-versatile' : 'model-id'}
+          className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-emerald-500/80 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-400 transition-colors"
+        />
+      ) : (
+        <select
+          value={currentModel}
+          onChange={(e) => onChangeModel(e.target.value)}
+          className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
+        >
+          {displayOptions.map((opt) => (
+            <option key={opt} value={opt}>
+              {formatModelLabel(opt)}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 export function SettingsView({
   language,
   settings,
@@ -70,6 +179,87 @@ export function SettingsView({
   const [notice, setNotice] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelFetchNotice, setModelFetchNotice] = useState<string | null>(null);
+  const [onlyFreeOpenRouter, setOnlyFreeOpenRouter] = useState(false);
+  const [customModelMode, setCustomModelMode] = useState<Record<AiProvider, boolean>>({
+    gemini: false,
+    groq: false,
+    openrouter: false,
+    custom: false,
+  });
+
+  const [modelOptions, setModelOptions] = useState<Record<AiProvider, string[]>>({
+    gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    groq: [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'qwen-2.5-32b',
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it',
+    ],
+    openrouter: [
+      'deepseek/deepseek-r1',
+      'anthropic/claude-3.5-sonnet',
+      'meta-llama/llama-3.3-70b-instruct',
+      'google/gemini-2.5-flash',
+      'openai/gpt-4o',
+    ],
+    custom: ['llama3', 'mistral', 'qwen2.5'],
+  });
+
+  const handleFetchModels = async (provOverride?: AiProvider) => {
+    const prov = provOverride || draft.aiProvider;
+    let apiKey = '';
+    let baseUrl = '';
+
+    if (prov === 'groq') apiKey = draft.groqApiKey;
+    else if (prov === 'openrouter') apiKey = draft.openRouterApiKey;
+    else if (prov === 'gemini') apiKey = draft.geminiApiKey;
+    else if (prov === 'custom') {
+      apiKey = draft.customApiKey;
+      baseUrl = draft.customApiBaseUrl;
+    }
+
+    setFetchingModels(true);
+    setModelFetchNotice(null);
+
+    try {
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: prov, apiKey, baseUrl }),
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.models) && data.models.length > 0) {
+        setModelOptions((prev) => ({ ...prev, [prov]: data.models }));
+        setModelFetchNotice(
+          data.source === 'live_api' ? t.settings.liveModelsLoaded : null
+        );
+
+        // Auto-select valid model if current is invalid or decommissioned
+        if (prov === 'groq') {
+          if (!data.models.includes(draft.groqModel) || draft.groqModel === 'deepseek-r1-distill-llama-70b') {
+            setDraft((d) => ({ ...d, groqModel: data.models[0] }));
+          }
+        } else if (prov === 'openrouter') {
+          if (!data.models.includes(draft.openRouterModel)) {
+            setDraft((d) => ({ ...d, openRouterModel: data.models[0] }));
+          }
+        } else if (prov === 'gemini') {
+          if (!data.models.includes(draft.geminiModel)) {
+            setDraft((d) => ({ ...d, geminiModel: data.models[0] }));
+          }
+        }
+      } else {
+        setModelFetchNotice(data.error || t.settings.fetchModelsError);
+      }
+    } catch (err) {
+      setModelFetchNotice(err instanceof Error ? err.message : t.settings.fetchModelsError);
+    } finally {
+      setFetchingModels(false);
+    }
+  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +310,9 @@ export function SettingsView({
         freqtrade: data.freqtrade,
         checkedAt: new Date().toISOString(),
       });
+      if (data.ai?.ok) {
+        handleFetchModels(draft.aiProvider);
+      }
     } catch {
       setTestResult({
         ai: { ok: false, provider: draft.aiProvider, mode: 'missing', detail: 'Network error contacting server' },
@@ -262,6 +455,13 @@ export function SettingsView({
             </div>
 
             {/* Provider-Specific Form Inputs */}
+            {modelFetchNotice && (
+              <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-xs text-emerald-300 flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{modelFetchNotice}</span>
+              </div>
+            )}
+
             {draft.aiProvider === 'gemini' && (
               <div className="space-y-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">
                 <SecretInput
@@ -271,20 +471,23 @@ export function SettingsView({
                   placeholder="AIzaSy..."
                   hint={t.settings.geminiKeyHint}
                 />
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    {t.settings.modelLabel}
-                  </label>
-                  <select
-                    value={draft.geminiModel}
-                    onChange={(e) => setDraft({ ...draft, geminiModel: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended · Fast & Smart)</option>
-                    <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Ultra Lightweight)</option>
-                    <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
-                  </select>
-                </div>
+                <ModelControl
+                  provider="gemini"
+                  currentModel={draft.geminiModel}
+                  onChangeModel={(m) => setDraft({ ...draft, geminiModel: m })}
+                  options={modelOptions.gemini || []}
+                  isFetching={fetchingModels}
+                  onFetch={() => handleFetchModels('gemini')}
+                  isCustomInput={customModelMode.gemini}
+                  onToggleCustomInput={() =>
+                    setCustomModelMode((prev) => ({ ...prev, gemini: !prev.gemini }))
+                  }
+                  label={t.settings.modelLabel}
+                  fetchText={t.settings.fetchModels}
+                  fetchingText={t.settings.fetchingModels}
+                  customToggleText={t.settings.customModelOption}
+                  listToggleText="Listeye Dön"
+                />
               </div>
             )}
 
@@ -297,20 +500,31 @@ export function SettingsView({
                   placeholder="gsk_..."
                   hint={t.settings.groqKeyHint}
                 />
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    {t.settings.modelLabel}
-                  </label>
-                  <select
-                    value={draft.groqModel}
-                    onChange={(e) => setDraft({ ...draft, groqModel: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
-                    <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b (Reasoning)</option>
-                    <option value="mixtral-8x7b-32768">mixtral-8x7b-32768</option>
-                    <option value="gemma2-9b-it">gemma2-9b-it</option>
-                  </select>
+                <ModelControl
+                  provider="groq"
+                  currentModel={draft.groqModel}
+                  onChangeModel={(m) => setDraft({ ...draft, groqModel: m })}
+                  options={modelOptions.groq || []}
+                  isFetching={fetchingModels}
+                  onFetch={() => handleFetchModels('groq')}
+                  isCustomInput={customModelMode.groq}
+                  onToggleCustomInput={() =>
+                    setCustomModelMode((prev) => ({ ...prev, groq: !prev.groq }))
+                  }
+                  label={t.settings.modelLabel}
+                  fetchText={t.settings.fetchModels}
+                  fetchingText={t.settings.fetchingModels}
+                  customToggleText={t.settings.customModelOption}
+                  listToggleText="Listeye Dön"
+                />
+                <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-800/50 text-[11px] text-emerald-300 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">{t.settings.groqFreeNotice}</span>
+                    <p className="mt-0.5 text-slate-400">
+                      Önerilen: <strong className="text-emerald-300 font-mono">llama-3.3-70b-versatile</strong>. Diğer modeller için otomatik prompt modu devreye girer.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -324,20 +538,47 @@ export function SettingsView({
                   placeholder="sk-or-v1-..."
                   hint={t.settings.openRouterKeyHint}
                 />
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    {t.settings.modelLabel}
-                  </label>
-                  <select
-                    value={draft.openRouterModel}
-                    onChange={(e) => setDraft({ ...draft, openRouterModel: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    <option value="deepseek/deepseek-r1">deepseek/deepseek-r1 (Frontier Reasoning)</option>
-                    <option value="anthropic/claude-3.5-sonnet">anthropic/claude-3.5-sonnet</option>
-                    <option value="meta-llama/llama-3.3-70b-instruct">meta-llama/llama-3.3-70b-instruct</option>
-                    <option value="google/gemini-2.5-flash">google/gemini-2.5-flash</option>
-                  </select>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                  <span className="text-xs text-slate-300 font-medium">
+                    {t.settings.onlyFreeLabel}
+                  </span>
+                  <input
+                    type="checkbox"
+                    id="onlyFreeOpenRouter"
+                    checked={onlyFreeOpenRouter}
+                    onChange={(e) => setOnlyFreeOpenRouter(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-950 cursor-pointer"
+                  />
+                </div>
+                <ModelControl
+                  provider="openrouter"
+                  currentModel={draft.openRouterModel}
+                  onChangeModel={(m) => setDraft({ ...draft, openRouterModel: m })}
+                  options={
+                    onlyFreeOpenRouter
+                      ? (modelOptions.openrouter || []).filter((m) => m.endsWith(':free'))
+                      : modelOptions.openrouter || []
+                  }
+                  isFetching={fetchingModels}
+                  onFetch={() => handleFetchModels('openrouter')}
+                  isCustomInput={customModelMode.openrouter}
+                  onToggleCustomInput={() =>
+                    setCustomModelMode((prev) => ({ ...prev, openrouter: !prev.openrouter }))
+                  }
+                  label={t.settings.modelLabel}
+                  fetchText={t.settings.fetchModels}
+                  fetchingText={t.settings.fetchingModels}
+                  customToggleText={t.settings.customModelOption}
+                  listToggleText="Listeye Dön"
+                />
+                <div className="p-3 rounded-lg bg-indigo-950/30 border border-indigo-800/50 text-[11px] text-indigo-300 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span>{t.settings.openRouterFreeNotice}</span>
+                    <p className="mt-0.5 text-slate-400">
+                      Popüler ücretsizler: <code className="text-emerald-300 font-mono">deepseek/deepseek-r1:free</code>, <code className="text-emerald-300 font-mono">meta-llama/llama-3.3-70b-instruct:free</code>, <code className="text-emerald-300 font-mono">google/gemini-2.0-flash-exp:free</code>
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -362,18 +603,23 @@ export function SettingsView({
                   onChange={(val) => setDraft({ ...draft, customApiKey: val })}
                   placeholder="optional-bearer-token"
                 />
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    {t.settings.customModelLabel}
-                  </label>
-                  <input
-                    type="text"
-                    value={draft.customModel}
-                    onChange={(e) => setDraft({ ...draft, customModel: e.target.value })}
-                    placeholder="llama3"
-                    className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
+                <ModelControl
+                  provider="custom"
+                  currentModel={draft.customModel}
+                  onChangeModel={(m) => setDraft({ ...draft, customModel: m })}
+                  options={modelOptions.custom || []}
+                  isFetching={fetchingModels}
+                  onFetch={() => handleFetchModels('custom')}
+                  isCustomInput={customModelMode.custom}
+                  onToggleCustomInput={() =>
+                    setCustomModelMode((prev) => ({ ...prev, custom: !prev.custom }))
+                  }
+                  label={t.settings.modelLabel}
+                  fetchText={t.settings.fetchModels}
+                  fetchingText={t.settings.fetchingModels}
+                  customToggleText={t.settings.customModelOption}
+                  listToggleText="Listeye Dön"
+                />
               </div>
             )}
           </div>

@@ -73,6 +73,8 @@ export const DEFAULT_SKILLS: ModularSkillsConfig = {
   check_multi_timeframe_trend: true,
   calculate_dynamic_position_size: true,
   post_trade_journal_summary: true,
+  drawdown_circuit_breaker: true,
+  pre_trade_discipline_gate: true,
 };
 
 export const INITIAL_SIGNAL_LOGS: SignalLogEntry[] = [
@@ -164,7 +166,12 @@ export function loadApiSettings(): ApiSettings {
   try {
     const raw = getStorage(kind).getItem(KEYS.SETTINGS);
     if (!raw) return { ...DEFAULT_API_SETTINGS, storageKind: kind };
-    return { ...DEFAULT_API_SETTINGS, ...JSON.parse(raw), storageKind: kind };
+    const merged = { ...DEFAULT_API_SETTINGS, ...JSON.parse(raw), storageKind: kind };
+    // Automatically migrate decommissioned or obsolete model IDs
+    if (merged.groqModel === 'deepseek-r1-distill-llama-70b' || !merged.groqModel) {
+      merged.groqModel = 'llama-3.3-70b-versatile';
+    }
+    return merged;
   } catch {
     return { ...DEFAULT_API_SETTINGS, storageKind: kind };
   }
@@ -252,7 +259,8 @@ export function saveDataFeeds(cfg: DataFeedsConfig): void {
 }
 
 export function loadSkills(): ModularSkillsConfig {
-  return loadJson(KEYS.SKILLS, DEFAULT_SKILLS);
+  const loaded = loadJson(KEYS.SKILLS, DEFAULT_SKILLS);
+  return { ...DEFAULT_SKILLS, ...loaded };
 }
 
 export function saveSkills(cfg: ModularSkillsConfig): void {

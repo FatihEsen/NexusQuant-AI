@@ -154,6 +154,7 @@ export default function App() {
                   onChangeFeeds={handleChangeFeeds}
                   skills={skills}
                   onChangeSkills={handleChangeSkills}
+                  marketPulse={marketPulse}
                   logs={logs}
                   onNavigate={setActiveTab}
                 />

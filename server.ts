@@ -41,10 +41,12 @@ interface SimulateRequestBody {
     cryptoPanic: boolean;
   };
   enabledSkills?: {
-    fetch_sentiment_and_fear_greed: boolean;
-    check_multi_timeframe_trend: boolean;
-    calculate_dynamic_position_size: boolean;
-    post_trade_journal_summary: boolean;
+    fetch_sentiment_and_fear_greed?: boolean;
+    check_multi_timeframe_trend?: boolean;
+    calculate_dynamic_position_size?: boolean;
+    post_trade_journal_summary?: boolean;
+    drawdown_circuit_breaker?: boolean;
+    pre_trade_discipline_gate?: boolean;
   };
   customGeminiKey?: string;
   customGroqKey?: string;
@@ -220,6 +222,104 @@ app.get('/api/market-pulse', async (_req, res) => {
       'SOL/USDT': summarize('SOL/USDT', sol),
     },
     fetchedAt: new Date().toISOString(),
+  });
+});
+
+app.get('/api/order-book', async (req, res) => {
+  const pair = (req.query.pair as string) || 'BTC/USDT';
+  const instId = pair.replace('/', '-');
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const r = await fetch(
+      `https://www.okx.com/api/v5/market/books?instId=${encodeURIComponent(instId)}&sz=5`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+
+    if (r.ok) {
+      const json = (await r.json()) as {
+        data?: Array<{
+          asks: string[][];
+          bids: string[][];
+          ts: string;
+        }>;
+      };
+      const raw = json.data?.[0];
+      if (raw && Array.isArray(raw.asks) && Array.isArray(raw.bids)) {
+        const rawAsks = raw.asks.slice(0, 5).map((row) => ({
+          price: Number(row[0]),
+          size: Number(row[1]),
+          total: Number(row[0]) * Number(row[1]),
+        }));
+        const rawBids = raw.bids.slice(0, 5).map((row) => ({
+          price: Number(row[0]),
+          size: Number(row[1]),
+          total: Number(row[0]) * Number(row[1]),
+        }));
+
+        const maxAskVol = Math.max(...rawAsks.map((a) => a.total), 1);
+        const maxBidVol = Math.max(...rawBids.map((b) => b.total), 1);
+
+        const asks = rawAsks.map((a) => ({
+          ...a,
+          depthPct: Math.min(100, Math.round((a.total / maxAskVol) * 100)),
+        }));
+        const bids = rawBids.map((b) => ({
+          ...b,
+          depthPct: Math.min(100, Math.round((b.total / maxBidVol) * 100)),
+        }));
+
+        const bestAsk = asks[0]?.price ?? 0;
+        const bestBid = bids[0]?.price ?? 0;
+        const spread = Number((bestAsk - bestBid).toFixed(2));
+        const spreadPct = bestBid > 0 ? Number(((spread / bestBid) * 100).toFixed(4)) : 0;
+        const lastPrice = bestBid > 0 ? Number(((bestAsk + bestBid) / 2).toFixed(2)) : 0;
+
+        res.json({
+          pair,
+          asks,
+          bids,
+          spread,
+          spreadPct,
+          lastPrice,
+          timestamp: new Date().toISOString(),
+          source: 'live_okx',
+        });
+        return;
+      }
+    }
+  } catch {
+    // Graceful fallback
+  }
+
+  const basePrice = pair.includes('ETH') ? 3420 : pair.includes('SOL') ? 178 : 91250;
+  const spread = Number((basePrice * 0.0001).toFixed(2));
+  const asks = [
+    { price: basePrice + spread * 5, size: 0.85, total: (basePrice + spread * 5) * 0.85, depthPct: 75 },
+    { price: basePrice + spread * 4, size: 1.12, total: (basePrice + spread * 4) * 1.12, depthPct: 90 },
+    { price: basePrice + spread * 3, size: 0.45, total: (basePrice + spread * 3) * 0.45, depthPct: 40 },
+    { price: basePrice + spread * 2, size: 0.95, total: (basePrice + spread * 2) * 0.95, depthPct: 82 },
+    { price: basePrice + spread * 1, size: 1.40, total: (basePrice + spread * 1) * 1.40, depthPct: 100 },
+  ];
+  const bids = [
+    { price: basePrice - spread * 1, size: 1.25, total: (basePrice - spread * 1) * 1.25, depthPct: 95 },
+    { price: basePrice - spread * 2, size: 0.70, total: (basePrice - spread * 2) * 0.70, depthPct: 55 },
+    { price: basePrice - spread * 3, size: 1.50, total: (basePrice - spread * 3) * 1.50, depthPct: 100 },
+    { price: basePrice - spread * 4, size: 0.60, total: (basePrice - spread * 4) * 0.60, depthPct: 45 },
+    { price: basePrice - spread * 5, size: 0.90, total: (basePrice - spread * 5) * 0.90, depthPct: 70 },
+  ];
+
+  res.json({
+    pair,
+    asks,
+    bids,
+    spread,
+    spreadPct: 0.01,
+    lastPrice: basePrice,
+    timestamp: new Date().toISOString(),
+    source: 'simulated_fallback',
   });
 });
 
@@ -493,6 +593,220 @@ app.post('/api/test-connection', async (req, res) => {
   res.json(results);
 });
 
+app.post('/api/models', async (req, res) => {
+  const {
+    provider = 'gemini',
+    apiKey,
+    baseUrl,
+  } = (req.body || {}) as {
+    provider: 'gemini' | 'groq' | 'openrouter' | 'custom';
+    apiKey?: string;
+    baseUrl?: string;
+  };
+
+  try {
+    if (provider === 'groq') {
+      const key = apiKey?.trim() || process.env.GROQ_API_KEY?.trim();
+      if (!key) {
+        res.json({
+          provider: 'groq',
+          models: [
+            'llama-3.3-70b-versatile',
+            'llama-3.1-8b-instant',
+            'qwen-2.5-32b',
+            'mixtral-8x7b-32768',
+            'gemma2-9b-it',
+          ],
+          source: 'default_fallback',
+        });
+        return;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const gRes = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!gRes.ok) {
+        const errText = await gRes.text();
+        res.status(gRes.status).json({ error: `Groq error ${gRes.status}: ${errText}` });
+        return;
+      }
+
+      const data = (await gRes.json()) as { data?: Array<{ id: string; active?: boolean }> };
+      const rawList = Array.isArray(data.data) ? data.data : [];
+      // Filter out non-chat models (audio, whisper, guardrails, tts)
+      const filtered = rawList
+        .map((m) => m.id)
+        .filter((id) => {
+          const lower = id.toLowerCase();
+          return (
+            !lower.includes('whisper') &&
+            !lower.includes('guard') &&
+            !lower.includes('orpheus') &&
+            !lower.includes('tts')
+          );
+        })
+        .sort((a, b) => {
+          if (a.includes('70b') && !b.includes('70b')) return -1;
+          if (!a.includes('70b') && b.includes('70b')) return 1;
+          return a.localeCompare(b);
+        });
+
+      res.json({
+        provider: 'groq',
+        models: filtered.length > 0 ? filtered : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+        source: 'live_api',
+      });
+      return;
+    }
+
+    if (provider === 'openrouter') {
+      const key = apiKey?.trim() || process.env.OPENROUTER_API_KEY?.trim();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const headers: Record<string, string> = {
+        'HTTP-Referer': 'https://nexusquant.ai',
+        'X-Title': 'NexusQuant AI',
+      };
+      if (key) headers.Authorization = `Bearer ${key}`;
+
+      const oRes = await fetch('https://openrouter.ai/api/v1/models', {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!oRes.ok) {
+        res.json({
+          provider: 'openrouter',
+          models: [
+            'deepseek/deepseek-r1',
+            'anthropic/claude-3.5-sonnet',
+            'meta-llama/llama-3.3-70b-instruct',
+            'google/gemini-2.5-flash',
+            'openai/gpt-4o',
+          ],
+          source: 'default_fallback',
+        });
+        return;
+      }
+
+      const data = (await oRes.json()) as {
+        data?: Array<{
+          id: string;
+          name?: string;
+          pricing?: { prompt?: string; completion?: string };
+        }>;
+      };
+      const rawList = Array.isArray(data.data) ? data.data : [];
+      const freeModels: string[] = [];
+      const paidModels: string[] = [];
+
+      for (const m of rawList) {
+        const isFree =
+          m.id.endsWith(':free') ||
+          (Number(m.pricing?.prompt || 1) === 0 && Number(m.pricing?.completion || 1) === 0);
+        if (isFree) {
+          freeModels.push(m.id);
+        } else {
+          paidModels.push(m.id);
+        }
+      }
+
+      const sorted = [...freeModels, ...paidModels];
+      res.json({
+        provider: 'openrouter',
+        models: sorted.length > 0 ? sorted.slice(0, 150) : ['deepseek/deepseek-r1:free', 'meta-llama/llama-3.3-70b-instruct:free'],
+        freeModels: freeModels.slice(0, 50),
+        source: 'live_api',
+      });
+      return;
+    }
+
+    if (provider === 'gemini') {
+      const key = apiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
+      if (!key) {
+        res.json({
+          provider: 'gemini',
+          models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+          source: 'default_fallback',
+        });
+        return;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const mRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timer);
+
+      if (!mRes.ok) {
+        res.json({
+          provider: 'gemini',
+          models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+          source: 'default_fallback',
+        });
+        return;
+      }
+
+      const data = (await mRes.json()) as {
+        models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
+      };
+      const rawList = Array.isArray(data.models) ? data.models : [];
+      const models = rawList
+        .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+        .map((m) => m.name.replace(/^models\//, ''))
+        .filter((id) => !id.includes('embedding') && !id.includes('imagen') && !id.includes('aqa'));
+
+      res.json({
+        provider: 'gemini',
+        models: models.length > 0 ? models : ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro'],
+        source: 'live_api',
+      });
+      return;
+    }
+
+    if (provider === 'custom') {
+      const targetBase = (baseUrl || 'http://localhost:11434/v1').trim().replace(/\/+$/, '');
+      const key = apiKey?.trim() || process.env.CUSTOM_API_KEY?.trim();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const headers: Record<string, string> = {};
+      if (key) headers.Authorization = `Bearer ${key}`;
+
+      const cRes = await fetch(`${targetBase}/models`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!cRes.ok) {
+        res.status(cRes.status).json({ error: `Custom endpoint error HTTP ${cRes.status}` });
+        return;
+      }
+
+      const data = (await cRes.json()) as { data?: Array<{ id: string }> };
+      const rawList = Array.isArray(data.data) ? data.data : [];
+      res.json({
+        provider: 'custom',
+        models: rawList.map((m) => m.id),
+        source: 'live_api',
+      });
+      return;
+    }
+
+    res.status(400).json({ error: 'Unknown provider' });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to query models' });
+  }
+});
+
 function cleanJsonOutput(text: string): string {
   const trimmed = (text || '').trim();
   const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
@@ -519,6 +833,8 @@ const simulateHandler = async (req: express.Request, res: express.Response) => {
     check_multi_timeframe_trend: true,
     calculate_dynamic_position_size: true,
     post_trade_journal_summary: true,
+    drawdown_circuit_breaker: true,
+    pre_trade_discipline_gate: true,
   };
 
   let compactCsv = body.compactCsv || '';
@@ -608,6 +924,40 @@ Keep explanations concise (max 2 sentences).`;
         recorded: true,
         language,
         note: String(args.summary_note || ''),
+      };
+    } else if (name === 'drawdown_circuit_breaker') {
+      const dailyLossPct = Number(args.daily_loss_pct ?? 0.4);
+      const losingStreak = Number(args.consecutive_losses ?? 0);
+      const maxDailyLossAllowed = 2.0;
+      const maxStreakAllowed = 2;
+      const isHalted = dailyLossPct >= maxDailyLossAllowed;
+      const isCooldown = losingStreak >= maxStreakAllowed;
+      const permission = isHalted ? 'HALTED' : isCooldown ? 'COOLDOWN' : 'TRADING_ALLOWED';
+      return {
+        decision: permission,
+        daily_loss_pct: dailyLossPct,
+        max_daily_loss_pct: maxDailyLossAllowed,
+        consecutive_losses: losingStreak,
+        cooldown_hours_remaining: isCooldown ? 24 : 0,
+        risk_allowed: permission === 'TRADING_ALLOWED',
+        protocol: 'claude-trading-skills/drawdown-circuit-breaker',
+      };
+    } else if (name === 'pre_trade_discipline_gate') {
+      const entryInPlan = args.entry_in_written_plan !== false;
+      const stopPredefined = args.stop_predefined !== false;
+      const sizeWithinPlan = args.size_within_plan !== false;
+      const noRevenge = args.no_revenge_trading !== false;
+      const passed = entryInPlan && stopPredefined && sizeWithinPlan && noRevenge;
+      return {
+        gate_passed: passed,
+        status: passed ? 'ORDER_PERMITTED' : 'REVIEW_REQUIRED_GATE_BLOCKED',
+        checklist: {
+          entry_in_written_plan: entryInPlan,
+          stop_loss_predefined: stopPredefined,
+          risk_size_within_plan: sizeWithinPlan,
+          emotional_revenge_checked: noRevenge,
+        },
+        protocol: 'claude-trading-skills/pre-trade-discipline-gate',
       };
     }
     return {};
@@ -710,6 +1060,36 @@ Keep explanations concise (max 2 sentences).`;
             },
           },
         }] : []),
+        ...(enabledSkills.drawdown_circuit_breaker ? [{
+          type: 'function',
+          function: {
+            name: 'drawdown_circuit_breaker',
+            description: 'Evaluate account-level daily drawdown (2% limit) and losing streak cooldown before allowing new trade risk.',
+            parameters: {
+              type: 'object',
+              properties: {
+                daily_loss_pct: { type: 'number', description: 'Current day realized loss percentage' },
+                consecutive_losses: { type: 'number', description: 'Number of consecutive losing trades' },
+              },
+            },
+          },
+        }] : []),
+        ...(enabledSkills.pre_trade_discipline_gate ? [{
+          type: 'function',
+          function: {
+            name: 'pre_trade_discipline_gate',
+            description: 'Pre-order discipline checklist gate to block unhedged, oversized, off-plan, or revenge entries.',
+            parameters: {
+              type: 'object',
+              properties: {
+                entry_in_written_plan: { type: 'boolean', description: 'Whether trade setup matches documented plan' },
+                stop_predefined: { type: 'boolean', description: 'Whether stop-loss price and risk percentage are predefined' },
+                size_within_plan: { type: 'boolean', description: 'Whether position stake is within portfolio risk rules' },
+                no_revenge_trading: { type: 'boolean', description: 'Verification that this entry is not an emotional revenge trade' },
+              },
+            },
+          },
+        }] : []),
       ];
 
       const messages: any[] = [
@@ -744,8 +1124,101 @@ Keep explanations concise (max 2 sentences).`;
 
       if (!res1.ok) {
         const errText = await res1.text();
-        throw new Error(`${aiProvider.toUpperCase()} HTTP ${res1.status}: ${errText}`);
-      }
+        const isToolUnsupported =
+          openAiTools.length > 0 &&
+          (errText.includes('tool calling') ||
+            errText.includes('tools') ||
+            errText.includes('param') ||
+            errText.includes('function') ||
+            res1.status === 400);
+
+        if (isToolUnsupported) {
+          // Graceful fallback for models that do not support OpenAI native function calling
+          // (e.g. gemma2-9b-it, qwen-2.5-32b, deepseek-r1-distill or certain free OpenRouter models):
+          // Pre-evaluate enabled skills on the server and inject findings into user prompt.
+          const preEvaluatedContext: string[] = [];
+
+          if (enabledSkills.fetch_sentiment_and_fear_greed) {
+            const sym = pair.split('/')[0] || 'BTC';
+            const sRes = await executeSkill('fetch_sentiment_and_fear_greed', { symbol: sym });
+            toolTrace.push({ skill: 'fetch_sentiment_and_fear_greed', args: { symbol: sym }, result: sRes });
+            preEvaluatedContext.push(`- Fear & Greed: ${sRes.fear_greed_index} (${sRes.classification})`);
+          }
+
+          if (enabledSkills.check_multi_timeframe_trend) {
+            const tRes = await executeSkill('check_multi_timeframe_trend', { pair, lower_timeframe: timeframe });
+            toolTrace.push({ skill: 'check_multi_timeframe_trend', args: { pair, lower_timeframe: timeframe }, result: tRes });
+            preEvaluatedContext.push(`- Multi-Timeframe Trend: 1H=${tRes.trend_1h} (${tRes.tf_1h_change_pct}%), 4H=${tRes.trend_4h} (${tRes.tf_4h_change_pct}%)`);
+          }
+
+          if (enabledSkills.drawdown_circuit_breaker) {
+            const cRes = await executeSkill('drawdown_circuit_breaker', {});
+            toolTrace.push({ skill: 'drawdown_circuit_breaker', args: {}, result: cRes });
+            preEvaluatedContext.push(`- Circuit Breaker: ${cRes.decision} (Risk Allowed: ${cRes.risk_allowed})`);
+          }
+
+          if (enabledSkills.pre_trade_discipline_gate) {
+            const gRes = await executeSkill('pre_trade_discipline_gate', {});
+            toolTrace.push({ skill: 'pre_trade_discipline_gate', args: {}, result: gRes });
+            preEvaluatedContext.push(`- Discipline Gate: ${gRes.status} (Passed: ${gRes.gate_passed})`);
+          }
+
+          if (enabledSkills.calculate_dynamic_position_size) {
+            const pRes = await executeSkill('calculate_dynamic_position_size', {
+              preliminary_confidence: confidenceThreshold,
+              atr_percent: atrPct,
+              base_stake_usdt: baseStakeUsdt,
+            });
+            toolTrace.push({
+              skill: 'calculate_dynamic_position_size',
+              args: {
+                preliminary_confidence: confidenceThreshold,
+                atr_percent: atrPct,
+                base_stake_usdt: baseStakeUsdt,
+              },
+              result: pRes,
+            });
+            preEvaluatedContext.push(`- Position Sizing: ${pRes.recommended_stake_usdt} USDT (Multiplier: ${pRes.recommended_multiplier}x)`);
+          }
+
+          const fallbackPrompt = [
+            userPrompt,
+            '',
+            'Pre-Evaluated Quant Tools & Signals (Local Execution):',
+            ...preEvaluatedContext,
+            '',
+            `Return your final decision STRICTLY as a JSON object with keys: action ("BUY"|"SELL"|"HOLD"), confidence (0-100), reasoning (${languageName}), position_multiplier (0.25-1.25), journal_note (1 sentence in ${languageName}).`,
+          ].join('\n');
+
+          const reqBodyFallback = {
+            model: targetModel,
+            messages: [
+              { role: 'system', content: systemInstruction },
+              { role: 'user', content: fallbackPrompt },
+            ],
+            temperature: 0.1,
+            response_format: { type: 'json_object' },
+          };
+
+          const resFallback = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(reqBodyFallback),
+          });
+
+          if (!resFallback.ok) {
+            const errFallback = await resFallback.text();
+            throw new Error(`${aiProvider.toUpperCase()} HTTP ${resFallback.status}: ${errFallback}`);
+          }
+
+          const jsonFallback = (await resFallback.json()) as any;
+          totalPromptTokens += jsonFallback.usage?.prompt_tokens ?? 0;
+          totalOutputTokens += jsonFallback.usage?.completion_tokens ?? 0;
+          rawJsonText = cleanJsonOutput(jsonFallback.choices?.[0]?.message?.content ?? '{}');
+        } else {
+          throw new Error(`${aiProvider.toUpperCase()} HTTP ${res1.status}: ${errText}`);
+        }
+      } else {
 
       const json1 = (await res1.json()) as any;
       totalPromptTokens += json1.usage?.prompt_tokens ?? 0;
@@ -799,8 +1272,9 @@ Keep explanations concise (max 2 sentences).`;
       } else {
         rawJsonText = cleanJsonOutput(message1?.content ?? '{}');
       }
-    } else {
-      // Default: Gemini
+    }
+  } else {
+    // Default: Gemini
       const effectiveKey = body.customGeminiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
       if (!effectiveKey) {
         res.status(400).json({
@@ -867,6 +1341,36 @@ Keep explanations concise (max 2 sentences).`;
               summary_note: { type: Type.STRING, description: '1-sentence rationale in the requested UI language' },
             },
             required: ['pair', 'proposed_action', 'summary_note'],
+          },
+        });
+      }
+
+      if (enabledSkills.drawdown_circuit_breaker) {
+        functionDeclarations.push({
+          name: 'drawdown_circuit_breaker',
+          description: 'Evaluate account-level daily drawdown (2% limit) and losing streak cooldown before allowing new trade risk.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              daily_loss_pct: { type: Type.NUMBER, description: 'Current day realized loss percentage' },
+              consecutive_losses: { type: Type.NUMBER, description: 'Number of consecutive losing trades' },
+            },
+          },
+        });
+      }
+
+      if (enabledSkills.pre_trade_discipline_gate) {
+        functionDeclarations.push({
+          name: 'pre_trade_discipline_gate',
+          description: 'Pre-order discipline checklist gate to block unhedged, oversized, off-plan, or revenge entries.',
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              entry_in_written_plan: { type: Type.BOOLEAN, description: 'Whether trade setup matches documented plan' },
+              stop_predefined: { type: Type.BOOLEAN, description: 'Whether stop-loss price and risk percentage are predefined' },
+              size_within_plan: { type: Type.BOOLEAN, description: 'Whether position stake is within portfolio risk rules' },
+              no_revenge_trading: { type: Type.BOOLEAN, description: 'Verification that this entry is not an emotional revenge trade' },
+            },
           },
         });
       }

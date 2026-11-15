@@ -117,18 +117,24 @@ One of the central design challenges of AI-assisted quantitative trading is high
 
 ---
 
-## 🧠 Modular Agent Skills (Function Calling)
+## 🧠 Modular Agent Skills (Function Calling & Claude Trading Skills)
 
-NexusQuant AI provides four optional, modular tool capabilities exposed as Gemini `FunctionDeclaration` definitions:
+NexusQuant AI provides six modular tool capabilities exposed to **Google Gemini**, **Groq**, **OpenRouter**, and custom OpenAI endpoints, integrating battle-tested protocols from the **[tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills)** library:
 
 1. `fetch_sentiment_and_fear_greed`:
    - Fetches live market sentiment ratings and CryptoPanic news headlines for the base asset.
 2. `check_multi_timeframe_trend`:
    - Inspects higher timeframe (1H and 4H) EMA slope alignment before confirming lower timeframe (5m/15m) entries.
-3. `calculate_dynamic_position_size`:
+3. `calculate_dynamic_position_size` *(derived from `position-sizer`)*:
    - Computes dynamic USDT stake multipliers (0.25x – 1.25x) based on AI confidence score and ATR volatility regime.
-4. `post_trade_journal_summary`:
+4. `post_trade_journal_summary` *(derived from `signal-postmortem`)*:
    - Generates a concise, localized 1-sentence trade post-mortem and rationale for the bot audit log.
+5. `drawdown_circuit_breaker` *(from `drawdown-circuit-breaker`)*:
+   - Capital preservation circuit breaker: evaluates daily loss limits (default 2%), consecutive losing streaks, and enforces a mandatory cooling-off window.
+6. `pre_trade_discipline_gate` *(from `pre-trade-discipline-gate`)*:
+   - Pre-order discipline checklist gate: validates that the candidate is within the written trading plan, stop-loss is predefined, risk size is controlled, and emotional revenge trading is blocked.
+
+Additionally, the complete library of **74 quantitative trading skills** from `claude-trading-skills` is installed locally and globally in `.agents/skills/` and `~/.gemini/config/skills/`, empowering AI agents to perform in-depth backtest auditing, crypto market regime scoring, and technical structure analysis directly within conversations.
 
 ---
 

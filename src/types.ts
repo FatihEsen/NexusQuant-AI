@@ -60,6 +60,8 @@ export interface ModularSkillsConfig {
   check_multi_timeframe_trend: boolean;
   calculate_dynamic_position_size: boolean;
   post_trade_journal_summary: boolean;
+  drawdown_circuit_breaker: boolean;
+  pre_trade_discipline_gate: boolean;
 }
 
 export interface ToolTraceItem {
@@ -95,7 +97,26 @@ export interface MarketPulsePair {
   changePct: number;
   rsi: number;
   source: 'live' | 'fallback';
+  candles: Array<{ t: number; o: number; h: number; l: number; c: number; v: number }>;
   compactCsv: string;
+}
+
+export interface OrderBookLevel {
+  price: number;
+  size: number;
+  total: number;
+  depthPct: number;
+}
+
+export interface OrderBookData {
+  pair: string;
+  asks: OrderBookLevel[];
+  bids: OrderBookLevel[];
+  spread: number;
+  spreadPct: number;
+  lastPrice: number;
+  timestamp: string;
+  source: 'live_okx' | 'simulated_fallback';
 }
 
 export interface MarketPulseData {

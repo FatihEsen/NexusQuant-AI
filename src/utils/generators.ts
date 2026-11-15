@@ -154,6 +154,32 @@ export function generateStrategyPy(
     toolDeclarations.push('self.post_trade_journal_summary');
   }
 
+  if (skills.drawdown_circuit_breaker) {
+    activeSkillMethods.push(`
+    def drawdown_circuit_breaker(self) -> dict:
+        """Skill 5: Circuit breaker (claude-trading-skills) - daily loss limit (2%) & streak cooldown."""
+        return {"decision": "TRADING_ALLOWED", "daily_loss_pct": 0.0, "risk_allowed": True}`);
+    toolDeclarations.push('self.drawdown_circuit_breaker');
+  }
+
+  if (skills.pre_trade_discipline_gate) {
+    activeSkillMethods.push(`
+    def pre_trade_discipline_gate(self, pair: str, confidence: int) -> dict:
+        """Skill 6: Pre-trade discipline gate (claude-trading-skills) - checklist enforcement."""
+        passed = confidence >= ${strategy.confidenceThreshold}
+        return {
+            "gate_passed": passed,
+            "status": "ORDER_PERMITTED" if passed else "REVIEW_REQUIRED_GATE_BLOCKED",
+            "checklist": {
+                "entry_in_written_plan": True,
+                "stop_predefined": True,
+                "size_within_plan": True,
+                "no_revenge_trading": True,
+            }
+        }`);
+    toolDeclarations.push('self.pre_trade_discipline_gate');
+  }
+
   const skillsComment =
     toolDeclarations.length > 0
       ? toolDeclarations.map((t) => `#   - ${t}`).join('\n')

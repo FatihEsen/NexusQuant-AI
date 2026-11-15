@@ -11,3 +11,7 @@ coverage/
 graphify-out/.graphify_*
 graphify-out/cache/
 
+# Agent local skills & cache (maintained globally in ~/.gemini/config/skills)
+.agents/
+skills-lock.json
+

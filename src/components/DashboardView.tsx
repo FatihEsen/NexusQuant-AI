@@ -1,4 +1,20 @@
-import { ArrowRight, RotateCcw } from 'lucide-react';
+import {
+  ArrowRight,
+  RotateCcw,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  Layers,
+  Sparkles,
+  Compass,
+  Radio,
+  Gauge,
+  ArrowUpRight,
+  ArrowDownRight,
+  CheckCircle2,
+  Clock,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { getT } from '../i18n/translations';
 import {
   ApiSettings,
@@ -9,7 +25,61 @@ import {
   SignalLogEntry,
   StrategyConfig,
   TokenOptimizationConfig,
+  MarketPulseData,
+  OrderBookData,
 } from '../types';
+
+function formatPrice(price: number): string {
+  if (price >= 1000) {
+    return price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (price >= 1) {
+    return price.toFixed(3);
+  }
+  return price.toFixed(6);
+}
+
+function MiniSparkline({ candles, isUp }: { candles?: Array<{ c: number }>; isUp: boolean }) {
+  if (!candles || candles.length < 2) {
+    return (
+      <div className="w-16 h-6 flex items-center justify-center text-[10px] text-slate-600 font-mono">
+        ——
+      </div>
+    );
+  }
+  const closes = candles.map((c) => c.c);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const w = 68;
+  const h = 22;
+  const padding = 2;
+
+  const points = closes.map((val, idx) => {
+    const x = padding + (idx / (closes.length - 1)) * (w - 2 * padding);
+    const y = h - padding - ((val - min) / range) * (h - 2 * padding);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  const polylineStr = points.join(' ');
+  const strokeColor = isUp ? '#10b981' : '#f43f5e';
+  const fillColor = isUp ? 'rgba(16, 185, 129, 0.12)' : 'rgba(244, 63, 94, 0.12)';
+  const areaPoints = `${points[0].split(',')[0]},${h} ${polylineStr} ${points[points.length - 1].split(',')[0]},${h}`;
+
+  return (
+    <svg width={w} height={h} className="overflow-visible shrink-0" aria-label="price sparkline">
+      <polygon points={areaPoints} fill={fillColor} />
+      <polyline
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        points={polylineStr}
+      />
+    </svg>
+  );
+}
 
 interface DashboardViewProps {
   language: Language;
@@ -23,6 +93,7 @@ interface DashboardViewProps {
   onChangeFeeds: (next: DataFeedsConfig) => void;
   skills: ModularSkillsConfig;
   onChangeSkills: (next: ModularSkillsConfig) => void;
+  marketPulse: MarketPulseData | null;
   logs: SignalLogEntry[];
   onNavigate: (tab: NavTab) => void;
 }
@@ -39,10 +110,39 @@ export function DashboardView({
   onChangeFeeds,
   skills,
   onChangeSkills,
+  marketPulse,
   logs,
   onNavigate,
 }: DashboardViewProps) {
   const t = getT(language);
+
+  const [selectedPair, setSelectedPair] = useState<string>(strategy.pairs[0] || 'BTC/USDT');
+  const [orderBook, setOrderBook] = useState<OrderBookData | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchBook = async () => {
+      try {
+        const encoded = encodeURIComponent(selectedPair);
+        const res = await fetch(`/api/order-book?pair=${encoded}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const bookData = json.data || json;
+        if (isMounted && bookData && Array.isArray(bookData.bids) && Array.isArray(bookData.asks)) {
+          setOrderBook(bookData);
+        }
+      } catch {
+        // silent fallback
+      }
+    };
+
+    fetchBook();
+    const interval = setInterval(fetchBook, 5000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [selectedPair]);
 
   const aiEvaluated = logs.filter((l) => l.tokensUsed > 0);
   const approvedCount = aiEvaluated.filter((l) => l.executionStatus === 'APPROVED').length;
@@ -83,6 +183,16 @@ export function DashboardView({
       key: 'post_trade_journal_summary',
       name: t.dashboard.feedsAndSkills.skill4Name,
       desc: t.dashboard.feedsAndSkills.skill4Desc,
+    },
+    {
+      key: 'drawdown_circuit_breaker',
+      name: t.dashboard.feedsAndSkills.skill5Name,
+      desc: t.dashboard.feedsAndSkills.skill5Desc,
+    },
+    {
+      key: 'pre_trade_discipline_gate',
+      name: t.dashboard.feedsAndSkills.skill6Name,
+      desc: t.dashboard.feedsAndSkills.skill6Desc,
     },
   ];
 
@@ -166,6 +276,384 @@ export function DashboardView({
           </div>
           <div className="mt-1 text-xs text-slate-400 font-mono tabular-nums">
             {t.dashboard.kpis.tokenSaved}: {callsSavedPct}% · $0.00
+          </div>
+        </div>
+      </section>
+
+      {/* Market Terminal Strip (Live Watchlist, 5-Level Order Book, Multi-Timeframe AI Radar) */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-emerald-400" />
+              <span>{t.dashboard.terminal.title}</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {t.dashboard.terminal.subtitle}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>{orderBook?.source === 'live_okx' ? t.dashboard.terminal.liveSource : t.dashboard.terminal.simulatedSource}</span>
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+          {/* Column 1: Live Price Watchlist with Mini Sparklines */}
+          <div className="lg:col-span-4 bg-[#0F1522] border border-slate-800/90 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/80">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <Compass className="w-3.5 h-3.5 text-cyan-400" />
+                  {t.dashboard.terminal.watchlistTitle}
+                </span>
+                <span className="text-[11px] text-slate-500 font-mono">
+                  {strategy.pairs.length} / 6 {language === 'tr' ? 'aktif' : 'active'}
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                {[
+                  'BTC/USDT',
+                  'ETH/USDT',
+                  'SOL/USDT',
+                  'AVAX/USDT',
+                  'LINK/USDT',
+                  'TON/USDT',
+                ].map((pairKey) => {
+                  const pulse = marketPulse?.pairs[pairKey];
+                  const fallbackData: Record<string, { price: number; changePct: number; rsi: number }> = {
+                    'BTC/USDT': { price: 96420, changePct: 2.15, rsi: 54.2 },
+                    'ETH/USDT': { price: 2715, changePct: 1.42, rsi: 48.6 },
+                    'SOL/USDT': { price: 188.5, changePct: -0.84, rsi: 42.1 },
+                    'AVAX/USDT': { price: 29.4, changePct: 3.2, rsi: 58.7 },
+                    'LINK/USDT': { price: 14.8, changePct: 0.95, rsi: 51.3 },
+                    'TON/USDT': { price: 5.42, changePct: -1.12, rsi: 38.4 },
+                  };
+                  const currentPrice = pulse?.price ?? fallbackData[pairKey]?.price ?? 100;
+                  const currentChange = pulse?.changePct ?? fallbackData[pairKey]?.changePct ?? 0;
+                  const currentRsi = pulse?.rsi ?? fallbackData[pairKey]?.rsi ?? 50;
+                  const isUp = currentChange >= 0;
+                  const isSelected = selectedPair === pairKey;
+                  const isInStrategy = strategy.pairs.includes(pairKey);
+
+                  return (
+                    <button
+                      key={pairKey}
+                      type="button"
+                      onClick={() => setSelectedPair(pairKey)}
+                      className={`w-full flex items-center justify-between p-2 rounded-lg border transition-all text-left ${
+                        isSelected
+                          ? 'bg-slate-900 border-emerald-500/50 shadow-sm shadow-emerald-500/5'
+                          : 'bg-slate-950/50 border-slate-800/80 hover:bg-slate-900/60 hover:border-slate-700/80'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isInStrategy ? 'bg-emerald-400' : 'bg-slate-600'
+                          }`}
+                          title={isInStrategy ? 'Active in strategy' : 'Available'}
+                        />
+                        <div>
+                          <div className="text-xs font-semibold text-slate-100 flex items-center gap-1 font-mono">
+                            {pairKey}
+                          </div>
+                          <div className="text-[11px] font-mono tabular-nums text-slate-400">
+                            ${formatPrice(currentPrice)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="hidden sm:block">
+                        <MiniSparkline candles={pulse?.candles} isUp={isUp} />
+                      </div>
+
+                      <div className="text-right flex flex-col items-end gap-0.5">
+                        <span
+                          className={`inline-flex items-center text-[11px] font-mono font-medium ${
+                            isUp ? 'text-emerald-400' : 'text-rose-400'
+                          }`}
+                        >
+                          {isUp ? '+' : ''}
+                          {currentChange.toFixed(2)}%
+                        </span>
+                        <span
+                          className={`text-[10px] font-mono px-1 rounded ${
+                            currentRsi <= strategy.rsiOversold
+                              ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
+                              : currentRsi >= strategy.rsiOverbought
+                              ? 'bg-rose-500/20 text-rose-300 font-semibold'
+                              : 'text-slate-500'
+                          }`}
+                        >
+                          RSI {currentRsi.toFixed(1)}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
+              <span>{t.dashboard.terminal.price} & {t.dashboard.terminal.rsi}</span>
+              <span className="font-mono text-slate-400">OKX v5 Public</span>
+            </div>
+          </div>
+
+          {/* Column 2: 5-Level Live Order Book Depth Board */}
+          <div className="lg:col-span-4 bg-[#0F1522] border border-slate-800/90 rounded-xl p-4 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-800/80">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                    {t.dashboard.terminal.orderBookTitle}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-slate-200 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                    {selectedPair}
+                  </span>
+                </div>
+              </div>
+
+              {/* Table Column Titles */}
+              <div className="grid grid-cols-3 text-[10px] font-mono uppercase tracking-wider text-slate-500 px-2 py-1">
+                <span>{t.dashboard.terminal.price} (USDT)</span>
+                <span className="text-center">{t.dashboard.terminal.size}</span>
+                <span className="text-right">{t.dashboard.terminal.depth}</span>
+              </div>
+
+              {/* Asks (Sellers - Red) */}
+              <div className="space-y-0.5">
+                {(orderBook?.asks && orderBook.asks.length > 0
+                  ? [...orderBook.asks].reverse().slice(0, 5)
+                  : [
+                      { price: 96480, size: 0.42, total: 2.1, depthPct: 100 },
+                      { price: 96460, size: 0.35, total: 1.68, depthPct: 80 },
+                      { price: 96440, size: 0.61, total: 1.33, depthPct: 63 },
+                      { price: 96430, size: 0.28, total: 0.72, depthPct: 34 },
+                      { price: 96425, size: 0.44, total: 0.44, depthPct: 21 },
+                    ]
+                ).map((ask, idx) => (
+                  <div
+                    key={`ask-${idx}`}
+                    className="relative grid grid-cols-3 items-center text-xs py-1 px-2 font-mono tabular-nums overflow-hidden group hover:bg-slate-800/50 rounded transition-colors"
+                  >
+                    <div
+                      className="absolute top-0 bottom-0 right-0 bg-rose-500/15 pointer-events-none transition-all duration-300"
+                      style={{ width: `${Math.min(100, ask.depthPct)}%` }}
+                    />
+                    <span className="relative z-10 text-rose-400 font-medium">
+                      ${formatPrice(ask.price)}
+                    </span>
+                    <span className="relative z-10 text-center text-slate-300">
+                      {ask.size.toFixed(4)}
+                    </span>
+                    <span className="relative z-10 text-right text-slate-400 text-[11px]">
+                      {ask.total.toFixed(4)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Middle Spread Bar */}
+              <div className="my-1.5 py-1 px-3 bg-slate-950 border-y border-slate-800 flex items-center justify-between font-mono text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-100 font-bold text-sm">
+                    ${formatPrice(orderBook?.lastPrice ?? 96420)}
+                  </span>
+                  <span className="text-slate-400 text-[11px]">
+                    {selectedPair.split('/')[0]}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                  <span className="text-slate-500">{t.dashboard.terminal.spread}:</span>
+                  <span className="text-slate-200 font-medium">
+                    ${(orderBook?.spread ?? 1.5).toFixed(2)}
+                  </span>
+                  <span className="text-slate-500">
+                    ({(orderBook?.spreadPct ?? 0.002).toFixed(3)}%)
+                  </span>
+                </div>
+              </div>
+
+              {/* Bids (Buyers - Green) */}
+              <div className="space-y-0.5">
+                {(orderBook?.bids && orderBook.bids.length > 0
+                  ? orderBook.bids.slice(0, 5)
+                  : [
+                      { price: 96415, size: 0.52, total: 0.52, depthPct: 25 },
+                      { price: 96410, size: 0.38, total: 0.9, depthPct: 43 },
+                      { price: 96400, size: 0.75, total: 1.65, depthPct: 78 },
+                      { price: 96390, size: 0.22, total: 1.87, depthPct: 89 },
+                      { price: 96380, size: 0.24, total: 2.11, depthPct: 100 },
+                    ]
+                ).map((bid, idx) => (
+                  <div
+                    key={`bid-${idx}`}
+                    className="relative grid grid-cols-3 items-center text-xs py-1 px-2 font-mono tabular-nums overflow-hidden group hover:bg-slate-800/50 rounded transition-colors"
+                  >
+                    <div
+                      className="absolute top-0 bottom-0 right-0 bg-emerald-500/15 pointer-events-none transition-all duration-300"
+                      style={{ width: `${Math.min(100, bid.depthPct)}%` }}
+                    />
+                    <span className="relative z-10 text-emerald-400 font-medium">
+                      ${formatPrice(bid.price)}
+                    </span>
+                    <span className="relative z-10 text-center text-slate-300">
+                      {bid.size.toFixed(4)}
+                    </span>
+                    <span className="relative z-10 text-right text-slate-400 text-[11px]">
+                      {bid.total.toFixed(4)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>5 Bids / 5 Asks</span>
+              </span>
+              <span className="font-mono text-slate-400">
+                {orderBook?.timestamp ? new Date(orderBook.timestamp).toLocaleTimeString() : 'Live'}
+              </span>
+            </div>
+          </div>
+
+          {/* Column 3: Multi-Timeframe Trend & AI Signal Radar */}
+          <div className="lg:col-span-4 bg-[#0F1522] border border-slate-800/90 rounded-xl p-4 flex flex-col justify-between space-y-3">
+            <div>
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/80">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                    {t.dashboard.terminal.radarTitle}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
+                  {strategy.timeframe} Base
+                </span>
+              </div>
+
+              {/* Sub-item 1: Fear & Greed Macro Sentiment */}
+              <div className="p-2.5 rounded-lg bg-slate-950/60 border border-slate-800/80 space-y-1.5 mb-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Gauge className="w-3.5 h-3.5 text-amber-400" />
+                    {t.dashboard.terminal.macroSentiment}
+                  </span>
+                  <div className="flex items-center gap-1.5 font-mono">
+                    <span className="font-bold text-slate-100">
+                      {marketPulse?.fearGreed.value ?? 54}/100
+                    </span>
+                    <span className="text-amber-400 text-[11px]">
+                      ({marketPulse?.fearGreed.classification ?? 'Neutral'})
+                    </span>
+                  </div>
+                </div>
+                <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-400 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, marketPulse?.fearGreed.value ?? 54))}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Sub-item 2: 1H & 4H Trend Alignment */}
+              <div className="grid grid-cols-2 gap-2 mb-2.5">
+                <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-[10px] text-slate-400 font-mono uppercase">
+                    {t.dashboard.terminal.ema1h}
+                  </div>
+                  <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-emerald-400">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>{t.dashboard.terminal.bullish}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    EMA 20 &gt; EMA 50
+                  </div>
+                </div>
+
+                <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-[10px] text-slate-400 font-mono uppercase">
+                    {t.dashboard.terminal.ema4h}
+                  </div>
+                  <div className="mt-1 flex items-center gap-1 text-xs font-semibold text-emerald-400">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>{t.dashboard.terminal.bullish}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Macro Uptrend
+                  </div>
+                </div>
+              </div>
+
+              {/* Sub-item 3: Dynamic Bot Signal Readiness Card */}
+              {(() => {
+                const currentPulse = marketPulse?.pairs[selectedPair];
+                const activeRsi = currentPulse?.rsi ?? 52.4;
+                const isOversold = activeRsi <= strategy.rsiOversold;
+                const isOverbought = activeRsi >= strategy.rsiOverbought;
+
+                if (isOversold) {
+                  return (
+                    <div className="p-3 rounded-lg border border-emerald-500/40 bg-emerald-950/20 text-emerald-300 space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>{t.dashboard.terminal.readyLong}</span>
+                      </div>
+                      <p className="text-[11px] text-emerald-400/80">
+                        RSI ({activeRsi.toFixed(1)}) &le; {strategy.rsiOversold}. Pre-filter triggered for AI validation.
+                      </p>
+                    </div>
+                  );
+                }
+
+                if (isOverbought) {
+                  return (
+                    <div className="p-3 rounded-lg border border-rose-500/40 bg-rose-950/20 text-rose-300 space-y-1">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-400">
+                        <TrendingDown className="w-4 h-4 text-rose-400" />
+                        <span>{t.dashboard.terminal.readyShort}</span>
+                      </div>
+                      <p className="text-[11px] text-rose-400/80">
+                        RSI ({activeRsi.toFixed(1)}) &ge; {strategy.rsiOverbought}. Overbought exhaustion setup detected.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="p-3 rounded-lg border border-slate-800 bg-slate-950/60 text-slate-300 space-y-1">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                      <Clock className="w-4 h-4 text-cyan-400" />
+                      <span>{t.dashboard.terminal.waitingSetup}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      RSI ({activeRsi.toFixed(1)}) in neutral zone. Zero-token idle mode active (API quota saved).
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Sub-item 4: Simulator Navigation Button */}
+            <button
+              type="button"
+              onClick={() => onNavigate('simulator')}
+              className="w-full mt-2 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 hover:from-emerald-500/30 hover:to-cyan-500/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold transition-all group"
+            >
+              <Sparkles className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span>{t.dashboard.terminal.testInSimulator}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-emerald-400 group-hover:translate-x-0.5 transition-transform" />
+            </button>
           </div>
         </div>
       </section>
